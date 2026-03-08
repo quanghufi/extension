@@ -6,7 +6,11 @@
     "start": "node src/server.js",
     "test": "node --test src/**/*.test.js",
     "test:unit": "node --test src/**/*.test.js",
-    "spike": "node scripts/spike-test-v3.cjs"
+    "spike": "node scripts/spike-test-v3.cjs",
+    "e2e": "node scripts/e2e-test.js",
+    "e2e:codex": "node scripts/e2e-test.js --agent codex",
+    "e2e:claude": "node scripts/e2e-test.js --agent claude",
+    "e2e:dry": "node scripts/e2e-test.js --dry-run"
   },
   "dependencies": {
     "cross-spawn": "^7.0.6",
