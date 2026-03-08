@@ -13,6 +13,7 @@
 
 import { BaseAdapter } from './base-adapter.js';
 import { createEvent, createFinding } from '../schema/events.js';
+import { normalizeFindingPath } from '../utils/paths.js';
 
 /** Default Claude-specific timeout overrides */
 const CLAUDE_DEFAULTS = {
@@ -138,6 +139,11 @@ export class ClaudeAdapter extends BaseAdapter {
                 return this._extractFindingsFromArray(items);
             }
 
+            // If `result` is a string, it's Claude's envelope — fall back to text parsing
+            if (typeof items === 'string') {
+                return null; // Signal caller to use _parseTextOutput()
+            }
+
             // If it's a single finding-like object (must have both a summary AND a file reference)
             const hasSummary = parsed.summary || parsed.message || parsed.description;
             const hasFile = parsed.file || parsed.path || parsed.filename || parsed.location;
@@ -145,8 +151,8 @@ export class ClaudeAdapter extends BaseAdapter {
                 return this._extractFindingsFromArray([parsed]);
             }
 
-            // JSON was valid but didn't contain findings
-            return [];
+            // JSON was valid but didn't contain findings — return null to try text fallback
+            return null;
         } catch {
             return null; // JSON parse failed
         }
@@ -172,11 +178,18 @@ export class ClaudeAdapter extends BaseAdapter {
             );
             if (!summary) continue;
 
+            const rawFile = String(item.file ?? item.path ?? item.filename ?? item.location ?? 'unknown');
+            let normalizedFile;
+            try {
+                normalizedFile = normalizeFindingPath(rawFile, process.cwd());
+            } catch {
+                normalizedFile = rawFile; // Traversal or other error — use raw
+            }
             findings.push(createFinding({
                 severity: mapClaudeSeverity(String(item.severity ?? item.level ?? item.priority ?? 'medium')),
                 summary,
                 evidence: String(item.evidence ?? item.details ?? item.explanation ?? item.context ?? ''),
-                file: String(item.file ?? item.path ?? item.filename ?? item.location ?? 'unknown'),
+                file: normalizedFile,
                 line: typeof item.line === 'number' ? item.line
                     : typeof item.lineNumber === 'number' ? item.lineNumber
                         : typeof item.line_number === 'number' ? item.line_number
@@ -207,11 +220,17 @@ export class ClaudeAdapter extends BaseAdapter {
 
         while ((match = fileLinePattern.exec(output)) !== null) {
             const [, file, lineStr, summary] = match;
+            let normalizedFile;
+            try {
+                normalizedFile = normalizeFindingPath(file, process.cwd());
+            } catch {
+                normalizedFile = file;
+            }
             findings.push(createFinding({
                 severity: 'medium',
                 summary: summary.trim(),
                 evidence: '',
-                file: file,
+                file: normalizedFile,
                 line: parseInt(lineStr, 10),
                 confidence: 0.3, // Lower confidence for text-extracted findings
             }));
@@ -227,11 +246,17 @@ export class ClaudeAdapter extends BaseAdapter {
                 f.file === file && f.summary === title.trim()
             );
             if (!alreadyFound) {
+                let normalizedFile2;
+                try {
+                    normalizedFile2 = normalizeFindingPath(file, process.cwd());
+                } catch {
+                    normalizedFile2 = file;
+                }
                 findings.push(createFinding({
                     severity: 'medium',
                     summary: title.trim(),
                     evidence: description.trim(),
-                    file: file,
+                    file: normalizedFile2,
                     line: lineStr ? parseInt(lineStr, 10) : null,
                     confidence: 0.25,
                 }));

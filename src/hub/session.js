@@ -219,16 +219,26 @@ export class Session {
 
     /**
      * Try to determine which agent produced a finding.
-     * This is a best-effort lookup based on the finding events.
+     * Matches on dedupe_key since finding IDs are regenerated in parseResult().
      *
      * @param {import('../schema/events.js').Finding} finding
      * @returns {string|null}
      */
     _findAgentForFinding(finding) {
-        // Look through events for a finding event matching this finding's id
+        // Look through events for a finding event matching this finding's dedupe_key
         for (const event of this.events) {
-            if (event.event_type === 'finding' && event.payload?.raw?.id === finding.id) {
+            if (event.event_type === 'finding' && event.payload?.raw?.dedupe_key === finding.dedupe_key) {
                 return event.agent_id;
+            }
+        }
+        // Fallback: check if any agent explicitly tagged this finding
+        for (const event of this.events) {
+            if (event.event_type === 'finding' && event.agent_id) {
+                const raw = event.payload?.raw;
+                if (raw && (raw.file === finding.file || raw.path === finding.file) &&
+                    (raw.summary === finding.summary || raw.message === finding.summary)) {
+                    return event.agent_id;
+                }
             }
         }
         return null;

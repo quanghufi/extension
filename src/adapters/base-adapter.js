@@ -20,6 +20,7 @@
 import { createEvent } from '../schema/events.js';
 import spawn from 'cross-spawn';
 import { execSync } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 
 // ── Constants ────────────────────────────────────────
 
@@ -171,6 +172,10 @@ export class BaseAdapter {
             let allOutput = '';
             let killed = false;
 
+            // StringDecoder instances for proper multibyte UTF-8 handling
+            const stdoutDecoder = new StringDecoder('utf-8');
+            const stderrDecoder = new StringDecoder('utf-8');
+
             // Emit status: started
             enqueue(createEvent(sessionId, adapter.agentId, 'status', { state: 'started', cmd, args }));
 
@@ -197,13 +202,13 @@ export class BaseAdapter {
                 }
             }, adapter.timeouts.hardMs);
 
-            // ── Process output handling ───────────────
             /**
              * @param {string} source - 'stdout' | 'stderr'
              * @param {Buffer} data
+             * @param {StringDecoder} decoder
              */
-            function handleOutput(source, data) {
-                const chunk = data.toString('utf-8');
+            function handleOutput(source, data, decoder) {
+                const chunk = decoder.write(data);
 
                 // Record first byte timing
                 if (firstByteTime === null) {
@@ -250,10 +255,10 @@ export class BaseAdapter {
             }
 
             if (child.stdout) {
-                child.stdout.on('data', (data) => handleOutput('stdout', data));
+                child.stdout.on('data', (data) => handleOutput('stdout', data, stdoutDecoder));
             }
             if (child.stderr) {
-                child.stderr.on('data', (data) => handleOutput('stderr', data));
+                child.stderr.on('data', (data) => handleOutput('stderr', data, stderrDecoder));
             }
 
             // ── Process exit ──────────────────────────

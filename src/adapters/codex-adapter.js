@@ -105,11 +105,18 @@ export class CodexAdapter extends BaseAdapter {
 
                 // Only process if it has finding-like fields
                 if (raw.summary || raw.message || raw.description) {
+                    const rawFile = raw.file ?? raw.path ?? 'unknown';
+                    let normalizedFile;
+                    try {
+                        normalizedFile = normalizeFindingPath(String(rawFile), process.cwd());
+                    } catch {
+                        normalizedFile = String(rawFile);
+                    }
                     findings.push(createFinding({
                         severity: mapSeverity(raw.severity ?? raw.level ?? 'medium'),
                         summary: raw.summary ?? raw.message ?? raw.description ?? 'Unknown issue',
                         evidence: raw.evidence ?? raw.details ?? raw.context ?? '',
-                        file: raw.file ?? raw.path ?? 'unknown',
+                        file: normalizedFile,
                         line: typeof raw.line === 'number' ? raw.line : null,
                         confidence: typeof raw.confidence === 'number'
                             ? Math.min(1, Math.max(0, raw.confidence))

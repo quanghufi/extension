@@ -114,8 +114,17 @@ export class SnapshotManager {
             this._removePosixProtection(resolved);
         }
 
-        // Remove directory tree
-        fs.rmSync(resolved, { recursive: true, force: true });
+        // Clean up git worktree metadata if this was a worktree-based snapshot
+        try {
+            execSync(`git worktree remove --force "${resolved}"`, { stdio: 'pipe' });
+        } catch {
+            // Not a git worktree or git not available — fall through to rmSync
+        }
+
+        // Remove directory tree (handles robocopy/cp snapshots, or if worktree remove didn't fully clean up)
+        if (fs.existsSync(resolved)) {
+            fs.rmSync(resolved, { recursive: true, force: true });
+        }
     }
 
     /**
