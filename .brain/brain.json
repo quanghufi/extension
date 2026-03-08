@@ -1,10 +1,41 @@
 {
+  "meta": { "schema_version": "1.1.0", "awf_version": "4.0.2" },
   "project": {
     "name": "extension",
-    "description": "Kết nối làm việc giữa Antigravity và Codex CLI, Claude Code CLI",
+    "description": "Multi-agent communication hub — AI agents (Antigravity, Codex CLI, Claude Code CLI) collaborate on code review via event-driven architecture",
+    "type": "developer-tool",
+    "status": "Phase 2 — Adapter Layer",
     "created_at": "2026-03-08T11:27:26+07:00"
   },
-  "tech_stack": [],
-  "features": [],
-  "decisions": []
+  "tech_stack": {
+    "runtime": "Node.js 20+",
+    "language": "JavaScript (TypeScript migration planned Phase 1+)",
+    "testing": "node:test (built-in)",
+    "process": "cross-spawn (shell:false)",
+    "encoding": "UTF-8 enforced end-to-end"
+  },
+  "features": [
+    { "name": "Phase 0: Spike", "status": "complete", "description": "Validated Codex/Claude CLI interaction" },
+    { "name": "Phase 2.01: Base Adapters", "status": "complete", "description": "BaseAdapter, CodexAdapter, ClaudeCodeAdapter" },
+    { "name": "Phase 2.02: Generic Adapter + Registry", "status": "complete", "description": "GenericAdapter (config-driven) + AdapterRegistry (central factory)" }
+  ],
+  "decisions": [
+    { "decision": "Use spawn(shell:false) not exec()", "reason": "Security + cross-platform" },
+    { "decision": "3-tier timeout: firstByte/idle/hard", "reason": "Codex: 45s/20s/90s, Claude: 90s/30s/120s" },
+    { "decision": "Codex output goes to stderr", "reason": "stdoutBytes: 0, stderrBytes: 61838 (spike v3 evidence)" },
+    { "decision": "GenericAdapter multi-strategy parsing", "reason": "JSON→wrapped-JSON→NDJSON→text fallback chain" },
+    { "decision": "AdapterRegistry pre-registers codex+claude-code at import", "reason": "Ready-to-use without manual setup" }
+  ],
+  "knowledge_items": {
+    "gotchas": [
+      "--skip-git-repo-check does NOT exist for Codex",
+      "--output-format stream-json requires --verbose flag",
+      "Check combinedBytes (stdout+stderr) not just stdoutBytes for pass/fail"
+    ],
+    "conventions": [
+      "Vietnamese comments/docs normal (bilingual project)",
+      "Agent feedback in .feedback/, run logs in .agents/runs/",
+      "File splitting: warn >200 LOC, must split >300 LOC"
+    ]
+  }
 }

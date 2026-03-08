@@ -3,24 +3,26 @@
  * HTTP & WebSocket Server
  *
  * REST API for session lifecycle + WebSocket for live event streaming.
- * Session-scoped subscriptions with backpressure monitoring.
+ * Route handlers in api-routes.js, WebSocket in ws-handler.js.
  *
  * @module server
  */
 
 import http from 'node:http';
+import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import path from 'node:path';
 import fs from 'node:fs';
-import { Session } from './hub/session.js';
 import { SessionStore } from './hub/session-store.js';
 import { SnapshotManager } from './snapshot/snapshot-manager.js';
+import { apiListSessions, apiCreateSession, apiGetSession, apiDeleteSession, apiGetEvents } from './api-routes.js';
+import { handleWsConnection, broadcastEvent } from './ws-handler.js';
+import { getAdapter } from './adapters/adapter-registry.js';
+import { createEvent } from './schema/events.js';
 
 // ── Constants ────────────────────────────────────────
 
 const DEFAULT_PORT = 3847;
-const MAX_WS_BUFFER = 1_048_576; // 1MB backpressure limit
-const MAX_WS_QUEUE = 100;        // Max pending messages per client
 const UI_DIR = path.join(import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname), 'ui');
 
 // ── Server ───────────────────────────────────────────
@@ -42,7 +44,7 @@ export class HubServer {
         /** @type {SnapshotManager} */
         this.snapshots = new SnapshotManager(options.snapshotDir ?? './tmp/snapshots');
 
-        /** @type {Map<string, Session>} */
+        /** @type {Map<string, import('./hub/session.js').Session>} */
         this.activeSessions = new Map();
 
         /** @type {Map<string, Set<import('ws').WebSocket>>} */
@@ -64,7 +66,7 @@ export class HubServer {
             this._server = http.createServer((req, res) => this._handleHttp(req, res));
 
             this._wss = new WebSocketServer({ server: this._server });
-            this._wss.on('connection', (ws) => this._handleWsConnection(ws));
+            this._wss.on('connection', (ws) => handleWsConnection(ws, this));
 
             this._server.listen(this.port, () => {
                 console.log(`🚀 Hub server running at http://localhost:${this.port}`);
@@ -81,7 +83,6 @@ export class HubServer {
      */
     stop() {
         return new Promise((resolve) => {
-            // Close all WebSocket connections
             if (this._wss) {
                 for (const client of this._wss.clients) {
                     client.close(1001, 'Server shutting down');
@@ -94,6 +95,57 @@ export class HubServer {
                 resolve();
             }
         });
+    }
+
+    /**
+     * Broadcast event to all subscribers of a session.
+     * @param {string} sessionId
+     * @param {import('./schema/events.js').Event} event
+     */
+    broadcast(sessionId, event) {
+        broadcastEvent(this, sessionId, event);
+    }
+
+    /**
+     * Run a session by executing its agents.
+     * @param {string} sessionId
+     */
+    async runSession(sessionId) {
+        const session = this.activeSessions.get(sessionId);
+        if (!session) {
+            console.error(`runSession: Session not found: ${sessionId}`);
+            return;
+        }
+
+        try {
+            session.start();
+            const startEvent = createEvent(sessionId, 'system', 'status', { state: 'running' });
+            this.broadcast(sessionId, session.addEvent(startEvent));
+
+            // For now, just run codex
+            const agentId = 'codex';
+            const adapter = getAdapter(agentId);
+            session.registerAgent(agentId);
+
+            const { stream, done } = adapter.execute(sessionId, session.projectDir, session.prompt);
+
+            for await (const event of stream) {
+                session.addEvent(event);
+                this.broadcast(sessionId, event);
+            }
+
+            const result = await done;
+            session.finalize(result.status === 'ok' ? 'completed' : 'failed', result.findings);
+
+            const doneEvent = createEvent(sessionId, 'system', 'status', { state: session.state });
+            this.broadcast(sessionId, session.addEvent(doneEvent));
+
+        } catch (err) {
+            console.error(`runSession error for ${sessionId}:`, err);
+            const errorEvent = createEvent(sessionId, 'system', 'error', { message: err.message });
+            this.broadcast(sessionId, session.addEvent(errorEvent));
+            session.finalize('failed');
+        }
     }
 
     // ── HTTP Request Handler ─────────────────────────
@@ -117,203 +169,28 @@ export class HubServer {
             return;
         }
 
-        // API routes
+        // API routes — delegated to api-routes.js
         if (url.pathname === '/api/sessions' && method === 'GET') {
-            return this._apiListSessions(res);
+            return apiListSessions(this, res);
         }
         if (url.pathname === '/api/sessions' && method === 'POST') {
-            return this._apiCreateSession(req, res);
+            return apiCreateSession(this, req, res);
         }
         if (url.pathname.match(/^\/api\/sessions\/[^/]+$/) && method === 'GET') {
             const id = url.pathname.split('/').pop() ?? '';
-            return this._apiGetSession(id, res);
+            return apiGetSession(this, id, res);
         }
         if (url.pathname.match(/^\/api\/sessions\/[^/]+$/) && method === 'DELETE') {
             const id = url.pathname.split('/').pop() ?? '';
-            return this._apiDeleteSession(id, res);
+            return apiDeleteSession(this, id, res);
         }
         if (url.pathname.match(/^\/api\/sessions\/[^/]+\/events$/) && method === 'GET') {
             const id = url.pathname.split('/')[3] ?? '';
-            return this._apiGetEvents(id, url, res);
+            return apiGetEvents(this, id, url, res);
         }
 
         // Static file serving for UI
         return this._serveStatic(url.pathname, res);
-    }
-
-    // ── API Handlers ─────────────────────────────────
-
-    /**
-     * @param {http.ServerResponse} res
-     */
-    _apiListSessions(res) {
-        const ids = this.store.list();
-        const sessions = ids.map((id) => {
-            const active = this.activeSessions.get(id);
-            if (active) return active.toJSON();
-            const stored = this.store.load(id);
-            return stored ? stored.toJSON() : { id, state: 'unknown' };
-        });
-        this._json(res, 200, { sessions });
-    }
-
-    /**
-     * @param {http.IncomingMessage} req
-     * @param {http.ServerResponse} res
-     */
-    _apiCreateSession(req, res) {
-        this._readBody(req).then((body) => {
-            try {
-                const data = JSON.parse(body);
-                const session = new Session({
-                    projectDir: data.projectDir ?? process.cwd(),
-                    prompt: data.prompt ?? 'Review this code for bugs and issues',
-                });
-
-                this.activeSessions.set(session.id, session);
-                this.store.save(session);
-
-                this._json(res, 201, { session: session.toJSON() });
-            } catch (err) {
-                this._json(res, 400, { error: 'Invalid request body' });
-            }
-        });
-    }
-
-    /**
-     * @param {string} id
-     * @param {http.ServerResponse} res
-     */
-    _apiGetSession(id, res) {
-        const session = this.activeSessions.get(id) ?? this.store.load(id);
-        if (!session) {
-            return this._json(res, 404, { error: 'Session not found' });
-        }
-        this._json(res, 200, { session: session.toJSON() });
-    }
-
-    /**
-     * @param {string} id
-     * @param {http.ServerResponse} res
-     */
-    _apiDeleteSession(id, res) {
-        this.activeSessions.delete(id);
-        this.store.delete(id);
-        this._json(res, 200, { deleted: id });
-    }
-
-    /**
-     * @param {string} id
-     * @param {URL} url
-     * @param {http.ServerResponse} res
-     */
-    _apiGetEvents(id, url, res) {
-        const session = this.activeSessions.get(id) ?? this.store.load(id);
-        if (!session) {
-            return this._json(res, 404, { error: 'Session not found' });
-        }
-
-        const afterSeq = parseInt(url.searchParams.get('after') ?? '-1', 10);
-        const events = session.events.filter((e) => (e.seq ?? -1) > afterSeq);
-
-        this._json(res, 200, { events, total: session.events.length });
-    }
-
-    // ── WebSocket Handler ────────────────────────────
-
-    /**
-     * @param {import('ws').WebSocket} ws
-     */
-    _handleWsConnection(ws) {
-        /** @type {string|null} */
-        let subscribedSessionId = null;
-        /** @type {number} */
-        let pendingMessages = 0;
-
-        ws.on('message', (data) => {
-            try {
-                const msg = JSON.parse(data.toString());
-
-                if (msg.subscribe) {
-                    // Unsubscribe from previous
-                    if (subscribedSessionId) {
-                        this._unsubscribe(subscribedSessionId, ws);
-                    }
-
-                    subscribedSessionId = msg.subscribe;
-                    this._subscribe(subscribedSessionId, ws);
-
-                    ws.send(JSON.stringify({
-                        type: 'subscribed',
-                        sessionId: subscribedSessionId,
-                    }));
-                }
-
-                if (msg.unsubscribe) {
-                    if (subscribedSessionId) {
-                        this._unsubscribe(subscribedSessionId, ws);
-                        subscribedSessionId = null;
-                    }
-                }
-
-                if (msg.ping) {
-                    ws.send(JSON.stringify({ type: 'pong', ts: Date.now() }));
-                }
-            } catch {
-                ws.send(JSON.stringify({ type: 'error', message: 'Invalid message format' }));
-            }
-        });
-
-        ws.on('close', () => {
-            if (subscribedSessionId) {
-                this._unsubscribe(subscribedSessionId, ws);
-            }
-        });
-    }
-
-    /**
-     * Broadcast event to all subscribers of a session.
-     * @param {string} sessionId
-     * @param {import('../schema/events.js').Event} event
-     */
-    broadcast(sessionId, event) {
-        const subs = this.subscriptions.get(sessionId);
-        if (!subs) return;
-
-        const msg = JSON.stringify({ type: 'event', event });
-
-        for (const ws of subs) {
-            // Backpressure check
-            if (ws.bufferedAmount > MAX_WS_BUFFER) {
-                // Skip message — client is too slow
-                continue;
-            }
-            try {
-                ws.send(msg);
-            } catch {
-                // Client disconnected
-                subs.delete(ws);
-            }
-        }
-    }
-
-    /**
-     * @param {string} sessionId
-     * @param {import('ws').WebSocket} ws
-     */
-    _subscribe(sessionId, ws) {
-        if (!this.subscriptions.has(sessionId)) {
-            this.subscriptions.set(sessionId, new Set());
-        }
-        this.subscriptions.get(sessionId)?.add(ws);
-    }
-
-    /**
-     * @param {string} sessionId
-     * @param {import('ws').WebSocket} ws
-     */
-    _unsubscribe(sessionId, ws) {
-        this.subscriptions.get(sessionId)?.delete(ws);
     }
 
     // ── Static File Serving ──────────────────────────
@@ -353,31 +230,17 @@ export class HubServer {
         res.writeHead(200);
         fs.createReadStream(filePath).pipe(res);
     }
-
-    // ── Helpers ──────────────────────────────────────
-
-    /**
-     * @param {http.ServerResponse} res
-     * @param {number} status
-     * @param {unknown} data
-     */
-    _json(res, status, data) {
-        res.setHeader('Content-Type', 'application/json');
-        res.writeHead(status);
-        res.end(JSON.stringify(data));
-    }
-
-    /**
-     * @param {http.IncomingMessage} req
-     * @returns {Promise<string>}
-     */
-    _readBody(req) {
-        return new Promise((resolve) => {
-            let body = '';
-            req.on('data', (chunk) => { body += chunk.toString(); });
-            req.on('end', () => resolve(body));
-        });
-    }
 }
 
 export { DEFAULT_PORT };
+
+// ── Startup ──────────────────────────────────────────
+
+// This allows the script to be run directly to start the server.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+    const server = new HubServer();
+    server.start().catch((err) => {
+        console.error('Failed to start server:', err);
+        process.exit(1);
+    });
+}

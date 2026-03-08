@@ -12,6 +12,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import { AgentRegistry, InvalidTransitionError } from './agent-registry.js';
 
 // ── Constants ────────────────────────────────────────
 
@@ -67,8 +68,8 @@ export class Session {
         /** @type {import('../schema/events.js').Event[]} */
         this.events = [];
 
-        /** @type {Map<string, AgentState>} */
-        this.agents = new Map();
+        /** @type {AgentRegistry} */
+        this.agents = new AgentRegistry();
 
         /** @type {import('../schema/events.js').Finding[]} */
         this.allFindings = [];
@@ -101,19 +102,11 @@ export class Session {
 
     /**
      * Register an agent starting work on this session.
+     * Delegates to AgentRegistry (no-op if already registered).
      * @param {string} agentId
      */
     registerAgent(agentId) {
-        if (!this.agents.has(agentId)) {
-            this.agents.set(agentId, {
-                agentId,
-                state: 'pending',
-                startedAt: null,
-                completedAt: null,
-                findingCount: 0,
-                status: null,
-            });
-        }
+        this.agents.register(agentId);
     }
 
     // ── State Management ─────────────────────────────
@@ -245,24 +238,27 @@ export class Session {
     }
 
     /**
-     * Update internal agent state based on event.
+     * Update agent state based on event using validated transitions.
      * @param {import('../schema/events.js').Event} event
      */
     _updateAgentState(event) {
         const agentId = event.agent_id;
         this.registerAgent(agentId);
-        const agent = /** @type {AgentState} */ (this.agents.get(agentId));
 
         if (event.event_type === 'status') {
             const payload = /** @type {Record<string, unknown>} */ (event.payload);
             if (payload.state === 'started') {
-                agent.state = 'running';
-                agent.startedAt = event.timestamp;
+                this.agents.transition(agentId, 'running', {
+                    startedAt: event.timestamp,
+                });
             } else if (payload.state === 'done') {
-                agent.state = 'completed';
-                agent.completedAt = event.timestamp;
-                agent.status = /** @type {string|null} */ (payload.status ?? null);
-                agent.findingCount = typeof payload.findingCount === 'number' ? payload.findingCount : 0;
+                const status = /** @type {string|null} */ (payload.status ?? null);
+                const isFailure = status === 'failed' || status === 'timeout';
+                this.agents.transition(agentId, isFailure ? 'failed' : 'completed', {
+                    completedAt: event.timestamp,
+                    status,
+                    findingCount: typeof payload.findingCount === 'number' ? payload.findingCount : 0,
+                });
             }
         }
     }
@@ -284,7 +280,7 @@ export class Session {
             createdAt: this.createdAt,
             completedAt: this.completedAt,
             events: this.events,
-            agents: Object.fromEntries(this.agents),
+            agents: this.agents.toJSON(),
             allFindings: this.allFindings,
             groupedFindings: this.groupedFindings,
             _seqCounter: this._seqCounter,
@@ -313,11 +309,11 @@ export class Session {
         session.allFindings = /** @type {import('../schema/events.js').Finding[]} */ (data.allFindings ?? []);
         session.groupedFindings = /** @type {import('../schema/events.js').GroupedFinding[]} */ (data.groupedFindings ?? []);
 
-        // Restore agents map
+        // Restore agents registry
         if (data.agents && typeof data.agents === 'object') {
-            for (const [key, value] of Object.entries(data.agents)) {
-                session.agents.set(key, /** @type {AgentState} */(value));
-            }
+            session.agents = AgentRegistry.fromJSON(
+                /** @type {Record<string, import('./agent-registry.js').AgentState>} */ (data.agents)
+            );
         }
 
         return session;
@@ -335,16 +331,6 @@ function severityRank(severity) {
     return ranks[/** @type {keyof typeof ranks} */ (severity)] ?? 0;
 }
 
-// ── Types ────────────────────────────────────────────
-
-/**
- * @typedef {Object} AgentState
- * @property {string} agentId
- * @property {string} state - 'pending' | 'running' | 'completed'
- * @property {string|null} startedAt
- * @property {string|null} completedAt
- * @property {number} findingCount
- * @property {string|null} status - 'ok' | 'failed' | 'timeout'
- */
+// AgentState type now owned by agent-registry.js
 
 export { SESSION_STATES, TERMINAL_STATES, severityRank };

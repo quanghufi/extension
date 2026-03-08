@@ -68,6 +68,18 @@ Ready for Phase 1 — Event-Driven Hub.
 - All agent feedback goes in `.feedback/`
 - Agent run logs go in `.agents/runs/`
 
+### 🔪 File Splitting Rules (Auto-Enforced)
+
+> **Workflow chi tiết:** `.agents/workflows/file-splitting.md`
+
+| Metric | ⚠️ Warning | 🔴 Must Split |
+|--------|-----------|---------------|
+| Source lines | > 200 | > 300 |
+| Test lines | > 250 | > 400 |
+| File size | > 10 KB | > 15 KB |
+
+**Bắt buộc:** Agent PHẢI kiểm tra file target trước khi thêm code. Nếu file đã ở mức ⚠️ → tách trước, code sau. KHÔNG BAO GIỜ tạo file mới > 300 lines.
+
 ## Important: Do NOT
 
 - Modify `docs/spike-results.json` — this is evidence from automated test

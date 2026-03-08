@@ -1,0 +1,39 @@
+{
+  "updated_at": "2026-03-08T21:28:00+07:00",
+  "working_on": {
+    "feature": "Phase 2: Adapter Layer",
+    "task": "Phase 2.02 GenericAdapter + AdapterRegistry — COMPLETE",
+    "status": "done",
+    "files": [
+      "src/adapters/generic-adapter.js",
+      "src/adapters/adapter-registry.js",
+      "src/adapters/generic-adapter.test.js",
+      "src/adapters/adapter-registry.test.js"
+    ],
+    "blockers": [],
+    "notes": "All 235 tests pass (53 new). Next: wire registry into e2e-test.js or plan Phase 3."
+  },
+  "pending_tasks": [
+    { "task": "Wire AdapterRegistry into scripts/e2e-test.js", "priority": "low", "notes": "Optional — replace hardcoded imports" },
+    { "task": "Phase 3 planning — Event-Driven Hub", "priority": "medium", "notes": "Per AGENTS.md, ready for Phase 1 (event hub)" }
+  ],
+  "recent_changes": [
+    {
+      "timestamp": "2026-03-08T21:00:00+07:00",
+      "type": "feature",
+      "description": "Created GenericAdapter — config-driven CLI wrapper with multi-strategy parsing",
+      "files": ["src/adapters/generic-adapter.js", "src/adapters/generic-adapter.test.js"]
+    },
+    {
+      "timestamp": "2026-03-08T21:15:00+07:00",
+      "type": "feature",
+      "description": "Created AdapterRegistry — central adapter registry with codex/claude-code presets",
+      "files": ["src/adapters/adapter-registry.js", "src/adapters/adapter-registry.test.js"]
+    }
+  ],
+  "decisions_made": [
+    { "decision": "Multi-strategy parsing order: JSON array → wrapped JSON → NDJSON → text", "reason": "Prefer structured formats, graceful fallback" },
+    { "decision": "Pre-register codex+claude-code at module import", "reason": "Zero-config for common agents" },
+    { "decision": "Export presets as objects, not register automatically", "reason": "Consumers decide when to register ESLint/Semgrep" }
+  ]
+}
