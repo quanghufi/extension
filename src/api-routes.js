@@ -34,26 +34,29 @@ export function apiListSessions(server, res) {
  * @param {import('http').IncomingMessage} req
  * @param {import('http').ServerResponse} res
  */
-export function apiCreateSession(server, req, res) {
-    readBody(req).then((body) => {
-        try {
-            const data = JSON.parse(body);
-            const session = new Session({
-                projectDir: data.projectDir ?? process.cwd(),
-                prompt: data.prompt ?? 'Review this code for bugs and issues',
-            });
+export async function apiCreateSession(server, req, res) {
+    try {
+        const body = await readBody(req);
+        const data = JSON.parse(body);
 
-            server.activeSessions.set(session.id, session);
-            server.store.save(session);
+        const session = new Session({
+            projectDir: data.projectDir ?? process.cwd(),
+            prompt: data.prompt ?? 'Review this code for bugs and issues',
+        });
 
-            jsonResponse(res, 201, { session: session.toJSON() });
+        server.activeSessions.set(session.id, session);
+        server.store.save(session);
 
-            // Run the session in the background
-            server.runSession(session.id);
-        } catch (err) {
-            jsonResponse(res, 400, { error: 'Invalid request body' });
-        }
-    });
+        jsonResponse(res, 201, { session: session.toJSON() });
+
+        // Run in background and log any unhandled errors
+        server.runSession(session.id).catch(err => {
+            console.error(`[FATAL] Unhandled error in runSession for ${session.id}:`, err);
+        });
+
+    } catch (err) {
+        jsonResponse(res, 400, { error: 'Invalid request body' });
+    }
 }
 
 /**

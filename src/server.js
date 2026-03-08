@@ -22,7 +22,7 @@ import { createEvent } from './schema/events.js';
 
 // ── Constants ────────────────────────────────────────
 
-const DEFAULT_PORT = 3847;
+const DEFAULT_PORT = 3849;
 const UI_DIR = path.join(import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname), 'ui');
 
 // ── Server ───────────────────────────────────────────
@@ -116,23 +116,28 @@ export class HubServer {
             console.error(`runSession: Session not found: ${sessionId}`);
             return;
         }
+        console.log(`[Orchestrator] Starting run for session: ${sessionId}`);
 
         try {
             session.start();
             const startEvent = createEvent(sessionId, 'system', 'status', { state: 'running' });
+            console.log(`[Orchestrator] Broadcasting: ${startEvent.event_type} - ${startEvent.payload.state}`);
             this.broadcast(sessionId, session.addEvent(startEvent));
 
             // For now, just run codex
             const agentId = 'codex';
             const adapter = getAdapter(agentId);
             session.registerAgent(agentId);
+            console.log(`[Orchestrator] Executing adapter: ${agentId}`);
 
             const { stream, done } = adapter.execute(sessionId, session.projectDir, session.prompt);
+            console.log(`[Orchestrator] Adapter execution started, got stream and done promise.`);
 
             for await (const event of stream) {
                 session.addEvent(event);
                 this.broadcast(sessionId, event);
             }
+            console.log(`[Orchestrator] Stream finished.`);
 
             const result = await done;
             session.finalize(result.status === 'ok' ? 'completed' : 'failed', result.findings);
