@@ -1,0 +1,41 @@
+[
+  {
+    "test": "Codex CLI headless",
+    "pass": false,
+    "hasOutput": false,
+    "utf8Clean": true,
+    "name": "codex-review",
+    "status": "EXIT_2",
+    "exitCode": 2,
+    "durationMs": 83,
+    "stdout": "",
+    "stderr": "error: unexpected argument 'review' found\n\nUsage: codex review [OPTIONS] [PROMPT]\n\nFor more information, try '--help'.\n",
+    "stdoutBytes": 0
+  },
+  {
+    "test": "Claude Code CLI headless",
+    "pass": false,
+    "hasOutput": false,
+    "utf8Clean": true,
+    "jsonParseable": false,
+    "name": "claude-print",
+    "status": "TIMEOUT",
+    "durationMs": 60013,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "test": "Parallel execution",
+    "pass": false,
+    "totalTimeMs": 60018,
+    "codex": {
+      "status": "EXIT_2",
+      "durationMs": 112
+    },
+    "claude": {
+      "status": "TIMEOUT",
+      "durationMs": 60011
+    },
+    "ranParallel": false
+  }
+]
