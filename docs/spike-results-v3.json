@@ -1,0 +1,169 @@
+{
+  "meta": {
+    "version": "v3",
+    "runAt": "2026-03-08T05:59:39.620Z",
+    "codexShim": "C:\\Users\\quang\\AppData\\Roaming\\npm\\codex",
+    "claudeShim": "C:\\Users\\quang\\AppData\\Roaming\\npm\\claude",
+    "fixes": [
+      "hasOutput uses combinedBytes (stdout+stderr), not stdoutBytes only",
+      "spawn(shell:false) via cross-spawn fallback, not exec()",
+      "3-tier timeout: firstByte/idle/hard per agent type",
+      "Separate stdout/stderr/combined tracking",
+      "Re-test Claude json + stream-json modes",
+      "Resolved CLI shim paths (not shell resolution)",
+      "UTF-8 round-trip on combinedOutput"
+    ],
+    "timeoutPresets": {
+      "codex": {
+        "firstByteMs": 45000,
+        "idleMs": 20000,
+        "hardMs": 90000
+      },
+      "claude": {
+        "firstByteMs": 90000,
+        "idleMs": 30000,
+        "hardMs": 120000
+      },
+      "quick": {
+        "firstByteMs": 30000,
+        "idleMs": 15000,
+        "hardMs": 45000
+      }
+    }
+  },
+  "results": [
+    {
+      "test": "Codex CLI headless (spawn, 3-tier timeout)",
+      "command": "codex review \"prompt\"",
+      "pass": true,
+      "exitClean": true,
+      "hasOutput": true,
+      "utf8Clean": true,
+      "utf8RoundTrip": true,
+      "status": "OK",
+      "exitCode": 0,
+      "durationMs": 44587,
+      "stdoutBytes": 0,
+      "stderrBytes": 61838,
+      "combinedBytes": 61838,
+      "timeoutReason": null,
+      "stdoutPreview": "",
+      "stderrPreview": "2026-03-08T05:59:40.098401Z ERROR codex_core::codex: failed to load skill C:\\Users\\quang\\.gemini\\antigravity\\skills\\ai-engineer\\SKILL.md: invalid YAML: did not find expected key at line 3 column 3, while parsing a block mapping\n2026-03-08T05:59:40.098448Z ERROR codex_core::codex: failed to load skil"
+    },
+    {
+      "test": "Claude Code CLI headless (spawn, 3-tier timeout)",
+      "command": "claude -p --no-session-persistence \"prompt\"",
+      "pass": true,
+      "exitClean": true,
+      "hasOutput": true,
+      "utf8Clean": true,
+      "utf8RoundTrip": true,
+      "status": "OK",
+      "exitCode": 0,
+      "durationMs": 9601,
+      "stdoutBytes": 110,
+      "stderrBytes": 0,
+      "combinedBytes": 110,
+      "timeoutReason": null,
+      "stdoutPreview": "Xin chào! Đây là nội dung tiếng Việt để kiểm tra encoding UTF-8: ăâđêôơư ĂÂĐÊÔƠƯ\n",
+      "stderrPreview": ""
+    },
+    {
+      "test": "Claude --output-format json (re-test)",
+      "command": "claude -p --output-format json \"prompt\"",
+      "note": "Re-testing per Codex advice: previous \"unusable\" was under MCP load",
+      "pass": true,
+      "exitClean": true,
+      "hasOutput": true,
+      "utf8Clean": true,
+      "utf8RoundTrip": true,
+      "jsonParseable": true,
+      "status": "OK",
+      "exitCode": 0,
+      "durationMs": 11844,
+      "stdoutBytes": 934,
+      "stderrBytes": 0,
+      "combinedBytes": 934,
+      "timeoutReason": null,
+      "stdoutPreview": "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"duration_ms\":7933,\"duration_api_ms\":6319,\"num_turns\":2,\"result\":\"Here are 2 files in the current directory:\\n\\n*   `AGENTS.md`\\n*   `docs`\",\"stop_reason\":\"end_turn\",\"session_id\":\"85fa961e-f8ae-4f06-b3f0-baeeded782f1\",\"total_cost_usd\":0.00115,\"usage\":{\"input_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":46,\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cach",
+      "stderrPreview": ""
+    },
+    {
+      "test": "Claude --output-format stream-json (new test)",
+      "command": "claude -p --output-format stream-json \"prompt\"",
+      "pass": false,
+      "exitClean": false,
+      "hasOutput": true,
+      "utf8Clean": true,
+      "utf8RoundTrip": true,
+      "jsonLinesValid": false,
+      "status": "EXIT_1",
+      "exitCode": 1,
+      "durationMs": 3662,
+      "stdoutBytes": 0,
+      "stderrBytes": 74,
+      "combinedBytes": 74,
+      "timeoutReason": null,
+      "stdoutPreview": "",
+      "stderrPreview": "Error: When using --print, --output-format=stream-json requires --verbose\n"
+    },
+    {
+      "test": "Parallel execution (spawn, 1+1 slots)",
+      "mechanism": "Node.js spawn + Promise.all",
+      "pass": true,
+      "ranParallel": true,
+      "totalTimeMs": 21266,
+      "sumIndividualMs": 32416,
+      "codex": {
+        "status": "OK",
+        "durationMs": 21266,
+        "stdoutBytes": 0,
+        "stderrBytes": 57337,
+        "combinedBytes": 57337,
+        "pass": true,
+        "exitClean": true,
+        "hasOutput": true,
+        "utf8Clean": true,
+        "utf8RoundTrip": true
+      },
+      "claude": {
+        "status": "OK",
+        "durationMs": 11150,
+        "stdoutBytes": 75,
+        "stderrBytes": 0,
+        "combinedBytes": 75,
+        "pass": true,
+        "exitClean": true,
+        "hasOutput": true,
+        "utf8Clean": true,
+        "utf8RoundTrip": true
+      }
+    },
+    {
+      "test": "UTF-8 round-trip through JSON",
+      "pass": true,
+      "results": {
+        "vietnamese": {
+          "roundTripped": true,
+          "length": 70
+        },
+        "japanese": {
+          "roundTripped": true,
+          "length": 6
+        },
+        "emoji": {
+          "roundTripped": true,
+          "length": 6
+        },
+        "mixed": {
+          "roundTripped": true,
+          "length": 85
+        }
+      }
+    }
+  ],
+  "gate": {
+    "pass": true,
+    "totalDurationMs": 91065
+  }
+}

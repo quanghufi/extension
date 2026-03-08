@@ -7,7 +7,7 @@
     "name": "codex-review",
     "status": "EXIT_2",
     "exitCode": 2,
-    "durationMs": 83,
+    "durationMs": 210,
     "stdout": "",
     "stderr": "error: unexpected argument 'review' found\n\nUsage: codex review [OPTIONS] [PROMPT]\n\nFor more information, try '--help'.\n",
     "stdoutBytes": 0
@@ -20,21 +20,21 @@
     "jsonParseable": false,
     "name": "claude-print",
     "status": "TIMEOUT",
-    "durationMs": 60013,
+    "durationMs": 60023,
     "stdout": "",
     "stderr": ""
   },
   {
     "test": "Parallel execution",
     "pass": false,
-    "totalTimeMs": 60018,
+    "totalTimeMs": 60022,
     "codex": {
       "status": "EXIT_2",
-      "durationMs": 112
+      "durationMs": 103
     },
     "claude": {
       "status": "TIMEOUT",
-      "durationMs": 60011
+      "durationMs": 60016
     },
     "ranParallel": false
   }

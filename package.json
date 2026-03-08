@@ -1,0 +1,17 @@
+{
+  "name": "extension-hub",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test src/**/*.test.js",
+    "test:unit": "node --test src/**/*.test.js",
+    "spike": "node scripts/spike-test-v3.cjs"
+  },
+  "dependencies": {
+    "cross-spawn": "^7.0.6",
+    "ws": "^8.18.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {}
+}

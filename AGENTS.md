@@ -11,7 +11,7 @@ Multi-agent communication hub that enables AI agents (Antigravity, Codex CLI, Cl
 - **Runtime:** Node.js 20+
 - **Language:** JavaScript (migrating to TypeScript in Phase 1)
 - **Agent CLIs:**
-  - `codex review --skip-git-repo-check "prompt"` — Codex reviewer
+  - `codex review "prompt"` — Codex reviewer
   - `claude -p --no-session-persistence "prompt"` — Claude Code reviewer
 - **Encoding:** UTF-8 enforced end-to-end
 
@@ -25,33 +25,41 @@ d:\extension\
 │   ├── spike-results.json # Automated test output (evidence)
 │   └── ideas.md          # Brainstorm notes
 ├── scripts/
-│   └── spike-test.js     # Phase 0 test script (v1, needs fix)
+│   ├── spike-test.js     # Phase 0 test script (v1)
+│   ├── spike-test-v2.js  # Phase 0 test script (v2, had hasOutput bug)
+│   └── spike-test-v3.js  # Phase 0 test script (v3, all Codex fixes applied) ★
 ├── .feedback/
-│   ├── inbox.md          # Codex critique findings (6 findings)
-│   ├── responses.md      # Antigravity responses (6/6 accepted)
-│   └── action-plan.md    # Actions from critique
+│   ├── inbox.md          # Codex critique round 1 (6 findings)
+│   ├── inbox-v2.md       # Codex critique round 2 (8 findings)
+│   ├── inbox-v3.md       # Codex critique round 3 — Phase 1 plan (10 findings)
+│   ├── responses.md      # Antigravity responses round 1 (6/6 accepted)
+│   ├── responses-v2.md   # Antigravity responses round 2 (8/8 accepted)
+│   ├── responses-v3.md   # Antigravity responses round 3 (10/10 accepted)
+│   ├── action-plan.md    # Actions from critique round 1
+│   ├── action-plan-v2.md # Actions from critique round 2
+│   └── action-plan-v3.md # Actions from critique round 3 — Phase 1 plan fixes
 ├── .agents/              # Agent run logs and prompts
 ├── AGENTS.md             # This file
 └── README.md             # Project readme
 ```
 
-## Current Task: Spike v2
+## Current Task: Phase 0 — ✅ Complete
 
-The first spike test had flawed logic (TIMEOUT counted as pass, etc.). Need to:
-
-1. Fix `spike-test.js` → `spike-test-v2.js`
-2. Test exact production commands
-3. TIMEOUT = FAIL, require non-empty stdout
-4. Verify UTF-8 round-trip through JSON
-5. Test parallel via Node.js spawn
-6. Update spike report based on actual results
+Spike v3 passed all gate tests. Evidence in `docs/spike-results-v3.json`.
+Ready for Phase 1 — Event-Driven Hub.
 
 ## Key Decisions
 
 - **Evidence in repo wins** — manual runs outside repo are weak evidence
 - **UTF-8 enforcement** — explicit decode, not hope
 - **Immutable snapshots** — reviewers run on read-only copies (Phase 1)
-- `--output-format json` hangs for Claude CLI → use text mode + parse
+- `--output-format json` **WORKS** — was MCP overhead, not Claude bug (spike v3 evidence)
+- `--output-format stream-json` requires `--verbose` flag
+- **Codex output goes to stderr** — `stdoutBytes: 0, stderrBytes: 61838` (spike v3 evidence)
+- **3-tier timeout** — `firstByte/idle/hard` (Codex: 45s/20s/90s, Claude: 90s/30s/120s)
+- **`--skip-git-repo-check` does NOT exist** — removed from all commands
+- **Use spawn(shell:false)** — not exec(); cross-spawn for Windows
+- **Claude MCP overhead** — create reviewer profile with zero MCP servers
 
 ## Conventions
 
@@ -63,5 +71,9 @@ The first spike test had flawed logic (TIMEOUT counted as pass, etc.). Need to:
 ## Important: Do NOT
 
 - Modify `docs/spike-results.json` — this is evidence from automated test
-- Assume `--output-format json` works for Claude CLI (it hangs)
+- Assume `--output-format json` works for Claude CLI (needs re-test in clean env)
 - Count TIMEOUT as a passing test
+- Use `--skip-git-repo-check` flag for Codex (doesn't exist)
+- Use `exec()` for production — use `spawn(shell:false)` instead
+- Use single timeout — use 3-tier `firstByte/idle/hard` strategy
+- Check only `stdoutBytes` for pass/fail — use `combinedBytes` (stdout+stderr)

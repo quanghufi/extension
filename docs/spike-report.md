@@ -1,103 +1,110 @@
-# Phase 0 Spike Report — CLI Headless Integration
+# Spike Report — Phase 0: CLI Viability
 
-**Date:** 2026-03-08
-**Overall Result:** ✅ SPIKE PASS (with known limitations)
+**Date:** 2026-03-08  
+**Version:** v2 (corrected test methodology per Codex critique)
 
----
+## Executive Summary
 
-## Test Results
+**Overall: ⚠️ PARTIAL PASS — Both CLIs functional, integration quirks found**
 
-### Test 1: Codex CLI Headless ✅ PASS
+Both Codex and Claude Code CLIs work headlessly on Windows. Automated tests flagged failures, but root cause analysis reveals **integration quirks** rather than blocking issues:
 
-| Item | Result |
-|------|--------|
-| Command | `codex review "prompt"` |
-| Mode | Non-interactive (`review` subcommand) |
-| Exit code | 0 |
-| Output capture | ✅ stdout captured, structured text |
-| UTF-8 | ✅ No garbling |
+| Capability | Status | Note |
+|---|---|---|
+| Codex headless | ✅ Works | Output goes to **stderr**, not stdout |
+| Claude text mode | ⚠️ Slow | Needs >60s timeout (MCP init overhead) |
+| Claude json mode | ❌ Hangs | `--output-format json` confirmed unusable |
+| Parallel execution | ✅ Works | Promise.all verified |
+| UTF-8 round-trip | ✅ Works | Vietnamese/Japanese/emoji all pass |
 
-**Known issues:**
-- MCP skill loading warnings (benign, some SKILL.md files missing `description` field)
-- In PowerShell Jobs: "Not inside a trusted directory" error → needs `--skip-git-repo-check` flag
-- `codex exec` cũng có, nhưng `codex review` phù hợp hơn cho use case review
+## Test Results (v2)
 
-### Test 2: Claude Code CLI Headless ✅ PASS
-
-| Item | Result |
-|------|--------|
-| Command | `claude -p "prompt" --no-session-persistence` |
-| Mode | Print mode (`-p` flag) |
-| Exit code | 0 |
-| Output capture | ✅ stdout captured as plain text |
-| UTF-8 | ✅ "Xin chào Việt Nam" — diacritics perfect |
-
-**Known issues:**
-- `--output-format json` **HANGS** — process goes silent, no output, must be killed
-- `--output-format text` or no format flag → works correctly
-- Workaround: capture text output, parse manually (hoặc dùng `stream-json` sau)
-- `--no-session-persistence` recommended cho headless
-
-### Test 3: UTF-8 Vietnamese Capture ✅ PASS
-
-| Item | Result |
-|------|--------|
-| Codex output encoding | ✅ Clean UTF-8 |
-| Claude output encoding | ✅ "Xin chào Việt Nam." — perfect diacritics |
-| Vietnamese diacritics | ✅ ăâđêôơư ĂÂĐÊÔƠƯ captured correctly |
-| PowerShell capture | ✅ No garbling when using UTF-8 env vars |
-
-### Test 4: Parallel Execution ✅ PASS (with caveat)
-
-| Item | Result |
-|------|--------|
-| Method | PowerShell `Start-Job` (2 concurrent jobs) |
-| Total time | **12.8s** (ran in parallel) |
-| Codex job | ⚠️ "Not inside trusted directory" in job context |
-| Claude job | ✅ Completed successfully |
-| Conflict | None — both read-only operations |
-
-**Caveat:** Codex in PowerShell Jobs loses directory trust context. In production, sẽ dùng Node.js `child_process.spawn` thay vì PowerShell Jobs → sẽ inherit cwd correctly.
-
----
-
-## Summary of Learnings
-
-### What works ✅
-1. Cả 2 CLI đều có headless mode
-2. UTF-8 Vietnamese capture sạch
-3. Parallel execution khả thi
-4. Output là text stream, có thể parse
-
-### Known limitations ⚠️
-1. Claude Code `--output-format json` hangs → dùng text mode + manual parse
-2. Codex trong PowerShell Jobs mất trusted dir → dùng Node.js spawn
-3. MCP server loading thêm latency khi khởi động CLI
-4. Cần `--no-session-persistence` cho Claude Code headless
-5. Cần `--skip-git-repo-check` cho Codex trong subprocess
-
-### Recommended adapter commands
+### Test 1: Codex CLI Headless
 ```
-# Codex reviewer
-codex review --skip-git-repo-check "review prompt here"
-
-# Claude Code reviewer  
-claude -p --no-session-persistence "review prompt here"
+Command:  codex review "prompt"
+Status:   TIMEOUT (60s) — but Codex DID work in parallel test
+Root cause: Codex spends ~20-30s loading 500+ skill YAML files at startup
+Fix:      Increase timeout to 90s for single runs
+Key finding: Codex output goes to STDERR, not stdout
 ```
 
-### Architecture recommendation
+### Test 2: Claude Code CLI Headless
 ```
-Agent Adapter (Node.js)
-  └── spawn('codex', ['review', '--skip-git-repo-check', prompt])
-  └── spawn('claude', ['-p', '--no-session-persistence', prompt])
-  └── capture stdout as UTF-8 stream  
-  └── emit structured events to Hub
+Command:  claude -p --no-session-persistence "prompt"
+Status:   TIMEOUT (60s)
+Root cause: Claude loads MCP servers (neural-memory, notebooklm) at startup
+Evidence: Console showed "Xin chào!" response AFTER timeout window
+Fix:      Increase timeout to 90-120s
 ```
 
----
+### Test 3: Claude JSON Mode (Risk Test)
+```
+Command:  claude -p --output-format json "prompt"
+Status:   TIMEOUT (30s) — expected
+Verdict:  CONFIRMED UNUSABLE — do NOT use in production
+```
 
-## Verdict
+### Test 4: Parallel Execution
+```
+Mechanism: Node.js exec() + Promise.all
+Result:   ranParallel = true ✅
+Codex:    OK (24.5s, exit 0, but output in stderr)
+Claude:   TIMEOUT (60s)
+Note:     Parallel execution works — Codex finished in 24s when parallel
+```
 
-**✅ SPIKE PASS — Proceed to Phase 1**
+### Test 5: UTF-8 Round-Trip
+```
+Vietnamese: ✅ roundTripped
+Japanese:   ✅ roundTripped
+Emoji:      ✅ roundTripped
+Mixed:      ✅ roundTripped
+```
 
-Cả 2 CLI đều chạy headless được, capture UTF-8 sạch, và có thể chạy song song. Các limitations đã xác định đều có workaround rõ ràng. Sẵn sàng thiết kế Phase 1.
+## Findings & Decisions
+
+### Finding 1: Codex output goes to stderr
+**Impact:** High — our test checked stdout only  
+**Evidence:** Parallel test showed Codex exit 0 in 24s, but stdoutBytes = 0  
+**Manual test:** `codex review "Say hello" 2>&1` captured response on stderr  
+**Decision:** Capture both stdout+stderr as "output" for Codex
+
+### Finding 2: Both CLIs have slow startup on this machine
+**Impact:** Medium — 60s timeout too short  
+**Evidence:** Codex loads 500+ skill YAMLs (~20-30s), Claude loads MCP servers  
+**Decision:** Set timeout to 120s for production
+
+### Finding 3: `--skip-git-repo-check` doesn't exist
+**Impact:** Low — flag was never needed  
+**Evidence:** `codex review -h` shows no such flag  
+**Decision:** Remove from all docs/commands
+
+### Finding 4: Claude `--output-format json` is unusable
+**Impact:** Medium — must use text mode + parse  
+**Evidence:** Consistently hangs/timeouts across multiple test runs  
+**Decision:** Use text mode only, parse output manually
+
+## Corrected Production Commands
+
+```bash
+# Codex reviewer (capture stderr too)
+codex review "prompt" 2>&1
+
+# Claude reviewer (text mode, long timeout)
+claude -p --no-session-persistence "prompt"
+
+# NOT: --output-format json (hangs)
+# NOT: --skip-git-repo-check (doesn't exist)
+```
+
+## Next Steps
+
+1. ✅ Update `docs/BRIEF.md` with corrected commands
+2. ✅ Update `AGENTS.md` with findings
+3. [ ] Consider shorter prompts for faster CLI response
+4. [ ] Phase 1: Build event-driven hub using these corrected commands
+
+## Evidence Files
+
+- [`docs/spike-results-v2.json`](file:///d:/extension/docs/spike-results-v2.json) — Automated test output
+- [`scripts/spike-test-v2.js`](file:///d:/extension/scripts/spike-test-v2.js) — Test script (v2, corrected methodology)
