@@ -6,6 +6,7 @@
     "start": "node src/server.js",
     "test": "node --test src/**/*.test.js",
     "test:unit": "node --test src/**/*.test.js",
+    "smoke:codex": "node scripts/codex-smoke.js",
     "spike": "node scripts/spike-test-v3.cjs",
     "e2e": "node scripts/e2e-test.js",
     "e2e:codex": "node scripts/e2e-test.js --agent codex",

@@ -9,16 +9,14 @@ describe('CodexAdapter', () => {
         assert.equal(adapter.agentId, 'codex');
     });
 
-    it('buildCommand returns correct cmd and args', () => {
+    it('buildCommand returns current codex exec review args', () => {
         const adapter = new CodexAdapter();
         const { cmd, args } = adapter.buildCommand('/path/to/snapshot', 'Review this code');
 
         assert.equal(cmd, 'codex');
-        assert.ok(args.includes('review'));
-        assert.ok(args.includes('--output-format'));
-        assert.ok(args.includes('stream-json'));
-        assert.ok(args.includes('--verbose'));
-        assert.ok(args.includes('Review this code'));
+        assert.deepEqual(args.slice(0, 4), ['exec', 'review', '--skip-git-repo-check', '--json']);
+        assert.match(args[4], /Return the final answer as a JSON array only\./);
+        assert.match(args[4], /Review this code/);
     });
 
     it('uses default base timeouts', () => {
@@ -36,60 +34,39 @@ describe('CodexAdapter', () => {
 describe('CodexAdapter.parseChunk', () => {
     const adapter = new CodexAdapter();
 
-    it('parses JSON finding line', () => {
+    it('parses command start event from exec jsonl', () => {
         const chunk = JSON.stringify({
-            type: 'finding',
-            finding: { summary: 'Bug', file: 'a.js', line: 1 },
+            type: 'item.started',
+            item: { type: 'command_execution', command: 'git diff --name-only' },
         });
-        const events = adapter.parseChunk(chunk, 'sess-1');
-        assert.ok(events.length > 0);
-        assert.equal(events[0].event_type, 'finding');
-    });
 
-    it('parses JSON status line', () => {
-        const chunk = JSON.stringify({ type: 'status', state: 'analyzing' });
         const events = adapter.parseChunk(chunk, 'sess-1');
-        assert.ok(events.length > 0);
+        assert.equal(events.length, 1);
         assert.equal(events[0].event_type, 'status');
+        assert.equal(events[0].payload.state, 'command_started');
     });
 
-    it('parses JSON error line', () => {
-        const chunk = JSON.stringify({ type: 'error', message: 'Failed' });
-        const events = adapter.parseChunk(chunk, 'sess-1');
-        assert.ok(events.length > 0);
-        assert.equal(events[0].event_type, 'error');
-    });
-
-    it('handles multi-line chunks', () => {
-        const chunk = [
-            JSON.stringify({ type: 'status', state: 'start' }),
-            JSON.stringify({ type: 'finding', finding: { summary: 'A', file: 'b.js' } }),
-        ].join('\n');
+    it('parses agent message event from exec jsonl', () => {
+        const chunk = JSON.stringify({
+            type: 'item.completed',
+            item: { type: 'agent_message', text: '[{"summary":"Bug","file":"a.js"}]' },
+        });
 
         const events = adapter.parseChunk(chunk, 'sess-1');
-        assert.equal(events.length, 2);
+        assert.equal(events.length, 1);
+        assert.equal(events[0].event_type, 'status');
+        assert.equal(events[0].payload.state, 'agent_message');
     });
 
-    it('emits progress for substantive non-JSON text', () => {
-        const events = adapter.parseChunk('Analyzing src/server.js for vulnerabilities...', 'sess-1');
+    it('parses plain text fallback as progress', () => {
+        const events = adapter.parseChunk('Analyzing changed files...', 'sess-1');
         assert.equal(events.length, 1);
         assert.equal(events[0].event_type, 'status');
         assert.equal(events[0].payload.state, 'progress');
     });
 
     it('silently skips progress bars', () => {
-        const events = adapter.parseChunk('â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆ', 'sess-1');
-        assert.equal(events.length, 0);
-    });
-
-    it('skips empty and short lines', () => {
-        const events = adapter.parseChunk('\n  \n  hi\n', 'sess-1');
-        // "hi" is only 2 chars, should be skipped
-        assert.equal(events.length, 0);
-    });
-
-    it('handles empty chunk', () => {
-        const events = adapter.parseChunk('', 'sess-1');
+        const events = adapter.parseChunk('¦¦¦¦¦¦¦¦', 'sess-1');
         assert.equal(events.length, 0);
     });
 });
@@ -97,67 +74,53 @@ describe('CodexAdapter.parseChunk', () => {
 describe('CodexAdapter.parseResult', () => {
     const adapter = new CodexAdapter();
 
-    it('extracts findings from JSON lines', () => {
+    it('extracts findings from final agent_message JSON array', () => {
         const output = [
-            JSON.stringify({ summary: 'Null check missing', file: 'src/a.js', line: 10, severity: 'high' }),
-            JSON.stringify({ summary: 'Unused import', file: 'src/b.js', line: 1, severity: 'low' }),
+            JSON.stringify({ type: 'thread.started', thread_id: 't1' }),
+            JSON.stringify({
+                type: 'item.completed',
+                item: {
+                    type: 'agent_message',
+                    text: JSON.stringify([
+                        {
+                            summary: 'Null check missing',
+                            file: 'src/a.js',
+                            line: 10,
+                            severity: 'high',
+                            confidence: 0.9,
+                        },
+                    ]),
+                },
+            }),
         ].join('\n');
 
         const findings = adapter.parseResult(output, 'sess-1');
-        assert.equal(findings.length, 2);
-        assert.equal(findings[0].severity, 'high');
+        assert.equal(findings.length, 1);
         assert.equal(findings[0].summary, 'Null check missing');
-        assert.equal(findings[1].severity, 'low');
+        assert.equal(findings[0].severity, 'high');
+        assert.equal(findings[0].file, 'src/a.js');
+        assert.equal(findings[0].line, 10);
     });
 
-    it('handles finding wrapper object', () => {
+    it('returns empty array when final message is not structured json', () => {
         const output = JSON.stringify({
-            type: 'finding',
-            finding: { summary: 'Bug', file: 'x.js', severity: 'critical' },
+            type: 'item.completed',
+            item: { type: 'agent_message', text: 'Hello world' },
         });
 
         const findings = adapter.parseResult(output, 'sess-1');
-        assert.equal(findings.length, 1);
-        assert.equal(findings[0].severity, 'critical');
-    });
-
-    it('skips non-finding JSON lines', () => {
-        const output = [
-            JSON.stringify({ type: 'status', state: 'done' }),
-            JSON.stringify({ type: 'progress', percent: 50 }),
-        ].join('\n');
-
-        const findings = adapter.parseResult(output, 'sess-1');
         assert.equal(findings.length, 0);
-    });
-
-    it('skips non-JSON lines', () => {
-        const output = 'This is just plain text\nNot JSON at all';
-        const findings = adapter.parseResult(output, 'sess-1');
-        assert.equal(findings.length, 0);
-    });
-
-    it('handles empty output', () => {
-        const findings = adapter.parseResult('', 'sess-1');
-        assert.equal(findings.length, 0);
-    });
-
-    it('uses message/description fallback fields', () => {
-        const output = JSON.stringify({ message: 'Some issue', file: 'y.js' });
-        const findings = adapter.parseResult(output, 'sess-1');
-        assert.equal(findings.length, 1);
-        assert.equal(findings[0].summary, 'Some issue');
-    });
-
-    it('defaults file to "unknown" when missing', () => {
-        const output = JSON.stringify({ summary: 'No file given' });
-        const findings = adapter.parseResult(output, 'sess-1');
-        assert.equal(findings.length, 1);
-        assert.equal(findings[0].file, 'unknown');
     });
 
     it('clamps confidence to 0-1 range', () => {
-        const output = JSON.stringify({ summary: 'Test', file: 'a.js', confidence: 5.0 });
+        const output = JSON.stringify({
+            type: 'item.completed',
+            item: {
+                type: 'agent_message',
+                text: JSON.stringify([{ summary: 'Test', file: 'a.js', confidence: 5 }]),
+            },
+        });
+
         const findings = adapter.parseResult(output, 'sess-1');
         assert.equal(findings[0].confidence, 1);
     });

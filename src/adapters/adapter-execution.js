@@ -85,6 +85,7 @@ export function createEventQueue() {
  * Create and manage 3-tier timeout timers.
  * @param {object} params
  * @param {Readonly<{firstByteMs: number, idleMs: number, hardMs: number}>} params.timeouts
+ * @param {Record<string, string> | undefined} [params.env]
  * @param {() => boolean} params.hasFirstByte - Returns true if first byte was received
  * @param {(reason: string) => void} params.onTimeout - Called when a timeout fires
  * @returns {{ resetIdle: () => void, clearAll: () => void }}
@@ -238,7 +239,7 @@ export function handleProcessOutput({ source, data, decoder, sessionId, agentId,
  * @param {(allOutput: string, sessionId: string) => import('../schema/events.js').Finding[]} params.parseResult
  * @returns {{ stream: AsyncIterable<import('../schema/events.js').Event>, done: Promise<import('../schema/events.js').AdapterResult> }}
  */
-export function executeProcess({ sessionId, snapshotPath, agentId, command, timeouts, parseChunk, parseResult }) {
+export function executeProcess({ sessionId, snapshotPath, agentId, command, env, timeouts, parseChunk, parseResult }) {
     const { cmd, args } = command;
     const { enqueue, endStream, stream } = createEventQueue();
 
@@ -256,7 +257,7 @@ export function executeProcess({ sessionId, snapshotPath, agentId, command, time
             cwd: snapshotPath,
             stdio: ['ignore', 'pipe', 'pipe'],
             shell: false,
-            env: { ...process.env },
+            env: { ...process.env, ...(env ?? {}) },
         });
 
         // StringDecoder instances for proper multibyte UTF-8 handling

@@ -2,17 +2,23 @@
 /**
  * Codex CLI Adapter
  *
- * Handles Codex CLI specifics:
- * - Output comes from STDERR (stdout = 0 bytes)
- * - Uses `codex review` with --output-format stream-json --verbose
- * - Parses JSON-line output from stderr
+ * Uses `codex exec review --json` for machine-readable automation,
+ * while keeping isolated `CODEX_HOME` per workspace.
  *
  * @module adapters/codex-adapter
  */
 
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { BaseAdapter } from './base-adapter.js';
-import { createEvent, createFinding } from '../schema/events.js';
-import { normalizeFindingPath } from '../utils/paths.js';
+import {
+    formatReviewPrompt,
+    mapSeverity,
+    parseCodexExecChunk,
+    parseCodexExecResult,
+} from './codex-adapter-parsing.js';
 
 export class CodexAdapter extends BaseAdapter {
     /**
@@ -26,68 +32,95 @@ export class CodexAdapter extends BaseAdapter {
     }
 
     /**
-     * Build Codex CLI command.
-     * @param {string} snapshotPath
+     * @param {string} _snapshotPath
      * @param {string} prompt
      * @returns {{ cmd: string, args: string[] }}
      */
-    buildCommand(snapshotPath, prompt) {
+    buildCommand(_snapshotPath, prompt) {
         return {
             cmd: 'codex',
             args: [
+                'exec',
                 'review',
-                prompt,
+                '--skip-git-repo-check',
+                '--json',
+                formatReviewPrompt(prompt),
             ],
         };
     }
 
     /**
-     * Parse a chunk of Codex stderr output.
-     * Codex in stream-json mode emits newline-delimited JSON objects.
-     *
+     * @param {string} snapshotPath
+     * @returns {{ env: Record<string, string> }}
+     */
+    getExecutionOptions(snapshotPath) {
+        const { env } = this.prepareIsolatedHome(snapshotPath);
+        return { env };
+    }
+
+    /**
+     * @param {string} workspacePath
+     * @returns {{ homePath: string, env: Record<string, string> }}
+     */
+    prepareIsolatedHome(workspacePath) {
+        const hash = createHash('sha256')
+            .update(workspacePath, 'utf-8')
+            .digest('hex')
+            .slice(0, 12);
+
+        const homeRoot = path.join(os.tmpdir(), 'codex-review-home', hash);
+        const codexDir = path.join(homeRoot, '.codex');
+        fs.mkdirSync(codexDir, { recursive: true });
+
+        const sourceCodexDir = path.join(os.homedir(), '.codex');
+        for (const filename of ['auth.json', 'config.toml']) {
+            const sourcePath = path.join(sourceCodexDir, filename);
+            const targetPath = path.join(codexDir, filename);
+            try {
+                if (!fs.existsSync(sourcePath)) continue;
+
+                const sourceBytes = fs.readFileSync(sourcePath);
+                let needsCopy = true;
+                if (fs.existsSync(targetPath)) {
+                    const targetBytes = fs.readFileSync(targetPath);
+                    needsCopy = !sourceBytes.equals(targetBytes);
+                }
+
+                if (needsCopy) {
+                    fs.writeFileSync(targetPath, sourceBytes);
+                }
+            } catch {
+                // Non-fatal � user auth/config may not exist yet.
+            }
+        }
+
+        return {
+            homePath: homeRoot,
+            env: {
+                HOME: homeRoot,
+                USERPROFILE: homeRoot,
+                CODEX_HOME: codexDir,
+            },
+        };
+    }
+
+    /**
      * @param {string} chunk
      * @param {string} sessionId
      * @returns {import('../schema/events.js').Event[]}
      */
     parseChunk(chunk, sessionId) {
-        return [createEvent(sessionId, this.agentId, 'status', { state: 'progress', text: chunk })];
+        return parseCodexExecChunk(chunk, sessionId, this.agentId);
     }
 
     /**
-     * Parse all accumulated Codex output into findings.
      * @param {string} allOutput
      * @param {string} _sessionId
      * @returns {import('../schema/events.js').Finding[]}
      */
     parseResult(allOutput, _sessionId) {
-        if (allOutput.trim().length === 0) {
-            return [];
-        }
-        return [createFinding({
-            severity: 'medium',
-            summary: 'Codex Review',
-            evidence: allOutput,
-            file: 'unknown',
-            line: null,
-            confidence: 0.8,
-        })];
+        return parseCodexExecResult(allOutput);
     }
-}
-
-// ── Utility ──────────────────────────────────────────
-
-/**
- * Map various severity strings to our canonical set.
- * @param {string} raw
- * @returns {'critical' | 'high' | 'medium' | 'low'}
- */
-function mapSeverity(raw) {
-    const normalized = (raw ?? '').toString().toLowerCase().trim();
-    if (normalized === 'critical' || normalized === 'error' || normalized === 'fatal') return 'critical';
-    if (normalized === 'high' || normalized === 'warning' || normalized === 'warn') return 'high';
-    if (normalized === 'medium' || normalized === 'info' || normalized === 'note') return 'medium';
-    if (normalized === 'low' || normalized === 'hint' || normalized === 'suggestion') return 'low';
-    return 'medium'; // default
 }
 
 export { mapSeverity };

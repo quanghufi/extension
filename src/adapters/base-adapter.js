@@ -84,6 +84,17 @@ export class BaseAdapter {
         throw new Error('parseResult() must be overridden by subclass');
     }
 
+    /**
+     * Optional execution overrides for the child process.
+     * Subclasses can provide env/cwd adjustments without reimplementing execute().
+     *
+     * @param {string} _snapshotPath - Path to code snapshot
+     * @returns {{ env?: Record<string, string> }}
+     */
+    getExecutionOptions(_snapshotPath) {
+        return {};
+    }
+
     // ── Core Execute ─────────────────────────────────
 
     /**
@@ -96,12 +107,14 @@ export class BaseAdapter {
      */
     execute(sessionId, snapshotPath, prompt) {
         const { cmd, args } = this.buildCommand(snapshotPath, prompt);
+        const execution = this.getExecutionOptions(snapshotPath);
 
         return executeProcess({
             sessionId,
             snapshotPath,
             agentId: this.agentId,
             command: { cmd, args },
+            env: execution.env,
             timeouts: this.timeouts,
             parseChunk: (chunk, sid) => this.parseChunk(chunk, sid),
             parseResult: (allOutput, sid) => this.parseResult(allOutput, sid),

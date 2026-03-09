@@ -67,9 +67,11 @@ export function createEvent(sessionId, agentId, eventType, payload) {
  * @param {string} opts.file - File path (should be normalized before calling)
  * @param {number|null} [opts.line] - Line number (null if not applicable)
  * @param {number} [opts.confidence] - 0.0 to 1.0 (default 0.5)
+ * @param {string|null} [opts.fix_instructions] - How to fix (from Codex schema)
+ * @param {string|null} [opts.why_it_matters] - Why this matters (from Codex schema)
  * @returns {Finding}
  */
-export function createFinding({ severity, summary, evidence, file, line = null, confidence = 0.5 }) {
+export function createFinding({ severity, summary, evidence, file, line = null, confidence = 0.5, fix_instructions = null, why_it_matters = null }) {
     if (!SEVERITY_LEVELS.includes(severity)) {
         throw new Error(`severity must be one of: ${SEVERITY_LEVELS.join(', ')}`);
     }
@@ -95,6 +97,8 @@ export function createFinding({ severity, summary, evidence, file, line = null, 
         line,
         confidence,
         dedupe_key,
+        fix_instructions: fix_instructions ?? null,
+        why_it_matters: why_it_matters ?? null,
     };
 }
 
@@ -154,6 +158,8 @@ export function computeDedupeKey({ file, line, summary }) {
  * @property {number|null} line
  * @property {number} confidence - 0.0 to 1.0
  * @property {string} dedupe_key - SHA-256 fingerprint (16 chars)
+ * @property {string|null} fix_instructions - How to fix (from Codex schema)
+ * @property {string|null} why_it_matters - Why this matters (from Codex schema)
  */
 
 /**

@@ -98,6 +98,36 @@ describe('BaseAdapter.execute (integration with echo)', () => {
         assert.ok(done instanceof Promise);
     });
 
+    it('passes adapter env overrides to child process', async () => {
+        class EnvAdapter extends BaseAdapter {
+            buildCommand() {
+                if (process.platform === 'win32') {
+                    return { cmd: 'cmd', args: ['/c', 'echo', '%TEST_ROUTER_ENV%'] };
+                }
+                return { cmd: 'sh', args: ['-c', 'echo "$TEST_ROUTER_ENV"'] };
+            }
+            getExecutionOptions() {
+                return { env: { TEST_ROUTER_ENV: '9router' } };
+            }
+            parseChunk() { return []; }
+            parseResult(allOutput) {
+                return allOutput.includes('9router') ? [] : [{ missing: true }];
+            }
+        }
+
+        const adapter = new EnvAdapter('env-test', {
+            firstByteMs: 5000,
+            idleMs: 5000,
+            hardMs: 10000,
+        });
+
+        const { done } = adapter.execute('sess-1', process.cwd(), 'test');
+        const result = await done;
+
+        assert.equal(result.status, 'ok');
+        assert.equal(result.findings.length, 0);
+    });
+
     it('completes with ok status for successful command', async () => {
         class EchoAdapter extends BaseAdapter {
             buildCommand() {

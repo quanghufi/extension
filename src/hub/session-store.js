@@ -26,7 +26,9 @@ export class SessionStore {
     }
 
     /**
-     * Save session atomically (temp file + rename).
+     * Save session atomically (temp file + fsync + rename).
+     * fsync ensures data is flushed to disk before rename — prevents
+     * data loss on power failure. Cherry-picked from Codex MCP Bridge.
      * @param {Session} session
      */
     save(session) {
@@ -34,7 +36,15 @@ export class SessionStore {
         const tempPath = filePath + '.tmp.' + Date.now();
 
         const data = JSON.stringify(session.toJSON(), null, 2);
-        fs.writeFileSync(tempPath, data, 'utf-8');
+
+        // Write + fsync before rename (crash-safe)
+        const fd = fs.openSync(tempPath, 'w');
+        try {
+            fs.writeSync(fd, data, 0, 'utf-8');
+            fs.fsyncSync(fd);
+        } finally {
+            fs.closeSync(fd);
+        }
 
         // Atomic rename (same filesystem)
         fs.renameSync(tempPath, filePath);
