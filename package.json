@@ -8,10 +8,12 @@
     "test:unit": "node --test src/**/*.test.js",
     "smoke:codex": "node scripts/codex-smoke.js",
     "spike": "node scripts/spike-test-v3.cjs",
+    "demo:live-debug": "node scripts/live-debug-demo.js",
     "e2e": "node scripts/e2e-test.js",
     "e2e:codex": "node scripts/e2e-test.js --agent codex",
-    "e2e:claude": "node scripts/e2e-test.js --agent claude",
-    "e2e:dry": "node scripts/e2e-test.js --dry-run"
+    "e2e:dry": "node scripts/e2e-test.js --dry-run",
+    "mcp:codex": "python src/mcp/codex_review_mcp.py",
+    "test:mcp": "python -m pytest src/mcp/tests/ -v"
   },
   "dependencies": {
     "cross-spawn": "^7.0.6",

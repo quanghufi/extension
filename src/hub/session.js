@@ -36,8 +36,9 @@ export class Session {
      * @param {string} [opts.id] - Custom session ID
      * @param {string|null} [opts.parentSessionId] - Parent session for retries
      * @param {string} [opts.snapshotPath] - Path to code snapshot
+     * @param {string} [opts.agentId] - Agent adapter to use (default: 'codex')
      */
-    constructor({ projectDir, prompt, id, parentSessionId, snapshotPath }) {
+    constructor({ projectDir, prompt, id, parentSessionId, snapshotPath, agentId }) {
         /** @type {string} */
         this.id = id ?? uuidv4();
 
@@ -52,6 +53,9 @@ export class Session {
 
         /** @type {string|null} */
         this.snapshotPath = snapshotPath ?? null;
+
+        /** @type {string} */
+        this.agentId = agentId ?? 'codex';
 
         /** @type {string} */
         this.state = 'pending';
@@ -276,6 +280,7 @@ export class Session {
             prompt: this.prompt,
             parentSessionId: this.parentSessionId,
             snapshotPath: this.snapshotPath,
+            agentId: this.agentId,
             state: this.state,
             createdAt: this.createdAt,
             completedAt: this.completedAt,
@@ -299,6 +304,7 @@ export class Session {
             id: /** @type {string} */ (data.id),
             parentSessionId: /** @type {string|null} */ (data.parentSessionId ?? null),
             snapshotPath: /** @type {string|null} */ (data.snapshotPath ?? null),
+            agentId: /** @type {string|undefined} */ (data.agentId),
         });
 
         session.state = /** @type {string} */ (data.state ?? 'pending');
@@ -312,7 +318,7 @@ export class Session {
         // Restore agents registry
         if (data.agents && typeof data.agents === 'object') {
             session.agents = AgentRegistry.fromJSON(
-                /** @type {Record<string, import('./agent-registry.js').AgentState>} */ (data.agents)
+                /** @type {Record<string, import('./agent-registry.js').AgentState>} */(data.agents)
             );
         }
 

@@ -42,6 +42,7 @@ export async function apiCreateSession(server, req, res) {
         const session = new Session({
             projectDir: data.projectDir ?? process.cwd(),
             prompt: data.prompt ?? 'Review this code for bugs and issues',
+            agentId: data.agentId,
         });
 
         server.activeSessions.set(session.id, session);
@@ -102,6 +103,26 @@ export function apiGetEvents(server, id, url, res) {
     const events = session.events.filter((e) => (e.seq ?? -1) > afterSeq);
 
     jsonResponse(res, 200, { events, total: session.events.length });
+}
+
+/**
+ * GET /api/sessions/:id/findings — Get session findings (grouped + merged).
+ * @param {import('./server.js').HubServer} server
+ * @param {string} id
+ * @param {import('http').ServerResponse} res
+ */
+export function apiGetFindings(server, id, res) {
+    const session = server.activeSessions.get(id) ?? server.store.load(id);
+    if (!session) {
+        return jsonResponse(res, 404, { error: 'Session not found' });
+    }
+
+    jsonResponse(res, 200, {
+        grouped: session.groupedFindings,
+        merged: session.mergedFindings,
+        mergeStats: session.mergeStats,
+        totalRaw: session.allFindings.length,
+    });
 }
 
 // ── Shared Helpers ──────────────────────────────────

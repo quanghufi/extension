@@ -3,7 +3,7 @@
  * Adapter Registry
  *
  * Central registry for reviewer adapters:
- * - Pre-registers Codex + Claude adapters
+ * - Pre-registers Codex adapter
  * - Allows registering new agents via config objects (GenericAdapter)
  * - Provides retrieval by agentId
  * - Thread-safe singleton pattern
@@ -18,8 +18,8 @@
  */
 
 import { CodexAdapter } from './codex-adapter.js';
-import { ClaudeAdapter } from './claude-adapter.js';
 import { GenericAdapter, defaultSeverityMapper } from './generic-adapter.js';
+import { McpCodexAdapter } from './mcp-adapter.js';
 
 // ── Type Definitions ─────────────────────────────────
 
@@ -49,7 +49,7 @@ function registerBuiltin(adapter) {
 // ── Pre-register built-in adapters ───────────────────
 
 registerBuiltin(new CodexAdapter());
-registerBuiltin(new ClaudeAdapter());
+registerBuiltin(new McpCodexAdapter());
 
 // ── Public API ───────────────────────────────────────
 
@@ -77,7 +77,7 @@ export function registerAdapter(configOrAdapter, options = {}) {
         && 'agentId' in configOrAdapter) {
         adapter = /** @type {BaseAdapter} */ (configOrAdapter);
     } else {
-        adapter = new GenericAdapter(/** @type {GenericAdapterConfig} */ (configOrAdapter));
+        adapter = new GenericAdapter(/** @type {GenericAdapterConfig} */(configOrAdapter));
     }
 
     const id = adapter.agentId;
@@ -141,7 +141,6 @@ export function unregisterAdapter(agentId) {
 export function resetRegistry() {
     registry.clear();
     registerBuiltin(new CodexAdapter());
-    registerBuiltin(new ClaudeAdapter());
 }
 
 // ── Preset Configurations ────────────────────────────

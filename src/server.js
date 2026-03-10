@@ -15,7 +15,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { SessionStore } from './hub/session-store.js';
 import { SnapshotManager } from './snapshot/snapshot-manager.js';
-import { apiListSessions, apiCreateSession, apiGetSession, apiDeleteSession, apiGetEvents } from './api-routes.js';
+import { apiListSessions, apiCreateSession, apiGetSession, apiDeleteSession, apiGetEvents, apiGetFindings } from './api-routes.js';
 import { handleWsConnection, broadcastEvent } from './ws-handler.js';
 import { getAdapter } from './adapters/adapter-registry.js';
 import { createEvent } from './schema/events.js';
@@ -124,8 +124,8 @@ export class HubServer {
             console.log(`[Orchestrator] Broadcasting: ${startEvent.event_type} - ${startEvent.payload.state}`);
             this.broadcast(sessionId, session.addEvent(startEvent));
 
-            // For now, just run codex
-            const agentId = 'codex';
+            // Use agent specified in session prompt or default to codex
+            const agentId = session.agentId ?? 'codex';
             const adapter = getAdapter(agentId);
             session.registerAgent(agentId);
             console.log(`[Orchestrator] Executing adapter: ${agentId}`);
@@ -140,16 +140,19 @@ export class HubServer {
             console.log(`[Orchestrator] Stream finished.`);
 
             const result = await done;
-            session.finalize(result.status === 'ok' ? 'completed' : 'failed', result.findings);
-
-            const doneEvent = createEvent(sessionId, 'system', 'status', { state: session.state });
+            const finalState = result.status === 'ok' ? 'completed' : 'failed';
+            const doneEvent = createEvent(sessionId, 'system', 'status', { state: finalState });
             this.broadcast(sessionId, session.addEvent(doneEvent));
+            session.finalize(finalState, result.findings);
 
         } catch (err) {
             console.error(`runSession error for ${sessionId}:`, err);
-            const errorEvent = createEvent(sessionId, 'system', 'error', { message: err.message });
-            this.broadcast(sessionId, session.addEvent(errorEvent));
-            session.finalize('failed');
+            if (!session.isTerminal()) {
+                const message = err instanceof Error ? err.message : String(err);
+                const errorEvent = createEvent(sessionId, 'system', 'error', { message });
+                this.broadcast(sessionId, session.addEvent(errorEvent));
+                session.finalize('failed');
+            }
         }
     }
 
@@ -192,6 +195,10 @@ export class HubServer {
         if (url.pathname.match(/^\/api\/sessions\/[^/]+\/events$/) && method === 'GET') {
             const id = url.pathname.split('/')[3] ?? '';
             return apiGetEvents(this, id, url, res);
+        }
+        if (url.pathname.match(/^\/api\/sessions\/[^/]+\/findings$/) && method === 'GET') {
+            const id = url.pathname.split('/')[3] ?? '';
+            return apiGetFindings(this, id, res);
         }
 
         // Static file serving for UI
