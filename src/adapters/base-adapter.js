@@ -21,7 +21,7 @@ import { executeProcess } from './adapter-execution.js';
 
 /** @type {Readonly<{firstByteMs: number, idleMs: number, hardMs: number}>} */
 const DEFAULT_TIMEOUTS = Object.freeze({
-    firstByteMs: 60_000,  // 60s to get first output (Claude MCP init can be slow)
+    firstByteMs: 60_000,  // 60s to get first output
     idleMs: 30_000,       // 30s of silence → assume stalled
     hardMs: 300_000,      // 5min hard cap per agent run
 });
@@ -30,7 +30,7 @@ const DEFAULT_TIMEOUTS = Object.freeze({
 
 export class BaseAdapter {
     /**
-     * @param {string} agentId - 'codex' | 'claude-code'
+     * @param {string} agentId - 'codex' or registered agent id
      * @param {object} [options]
      * @param {number} [options.firstByteMs]
      * @param {number} [options.idleMs]
@@ -38,7 +38,7 @@ export class BaseAdapter {
      */
     constructor(agentId, options = {}) {
         if (new.target === BaseAdapter) {
-            throw new Error('BaseAdapter is abstract — use CodexAdapter or ClaudeAdapter');
+            throw new Error('BaseAdapter is abstract — use CodexAdapter or GenericAdapter');
         }
         /** @type {string} */
         this.agentId = agentId;

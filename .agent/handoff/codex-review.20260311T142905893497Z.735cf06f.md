@@ -1,0 +1,39 @@
+# Codex Review
+
+## Overview
+- Status: has_findings
+- Summary: Re-review of `src/server.js` keeps both rebutted findings with stronger evidence and adds two additional correctness/security issues in the changed file.
+- Findings: 4
+
+## Key Findings
+
+### 1. [HIGH] Static path traversal check is bypassable with sibling directory names
+- Location: src/server.js:238
+- Why it matters: `path.join(UI_DIR, pathname)` normalizes `..` segments before the `startsWith(UI_DIR)` check. A request such as `/../ui-secret/file.txt` resolves to a sibling like `.../ui-secret/file.txt`, which still starts with the string `.../ui`, so the 403 guard is bypassed and arbitrary sibling files can be served.
+- Recommended fix: Resolve the candidate path with `path.resolve(UI_DIR, '.' + pathname)` (or equivalent), then verify containment with `path.relative(UI_DIR, resolved)` and reject when the relative path starts with `..` or is absolute. Add a regression test for a request like `/../ui-secret/file.txt` proving it returns 403/404 instead of reading outside `UI_DIR`.
+- Confidence: high
+
+### 2. [MEDIUM] `UI_DIR` fallback is incorrect on Windows when `import.meta.dirname` is unavailable
+- Location: src/server.js:26
+- Why it matters: The project targets Node.js 20+ on Windows, but `import.meta.dirname` is not available on all Node 20 releases. The fallback uses `new URL(import.meta.url).pathname`, which leaves URL encoding and the leading `/D:/...` form intact on Windows, producing an invalid filesystem path for static assets. That breaks dashboard serving on supported runtimes.
+- Recommended fix: Build the fallback from `fileURLToPath(import.meta.url)` instead of `.pathname`, for example `path.dirname(fileURLToPath(import.meta.url))`. Add a test that stubs the dirname calculation on a Windows-style file URL and verifies the resulting `UI_DIR` is a valid native path.
+- Confidence: high
+
+### 3. [MEDIUM] `reviewOptions` still break built-in non-MCP adapters
+- Location: src/server.js:136
+- Why it matters: This is not hypothetical in the current codebase. `src/adapters/adapter-registry.js` still pre-registers the built-in `codex` adapter, and `src/adapters/codex-adapter.js` still types `prompt` as a string and passes it into `formatReviewPrompt(prompt)`. In `runSession()`, any session with `agentId: 'codex'` plus `reviewOptions` now receives an object instead of the expected string, so a supported adapter path regresses.
+- Recommended fix: Only construct the `{ prompt, ...reviewOptions }` object for adapters that explicitly declare support for structured review options, or gate it to `agentId === 'mcp-codex'` until a real adapter capability flag exists. Add a server test that runs a session with `agentId: 'codex'` and `reviewOptions`, and assert `adapter.execute()` receives the original string prompt.
+- Confidence: high
+
+### 4. [LOW] Static file reads have no error handler after the 200 response is sent
+- Location: src/server.js:261
+- Why it matters: `fs.createReadStream(filePath).pipe(res)` can still emit `error` after `existsSync()` succeeds, for example on TOCTOU deletes, permission changes, or filesystem I/O faults. Without an `error` listener, Node treats that as an unhandled stream error and can tear down the request or process. The risk is low, but this is server code and the failure mode is abrupt.
+- Recommended fix: Attach an `error` handler to the read stream before piping. If headers are not sent yet, return a 500; otherwise destroy the response cleanly. Add a test that mocks `fs.createReadStream()` to emit an error and asserts the server does not crash and returns/terminates the response predictably.
+- Confidence: high
+
+## Recommendations
+- Replace the static-file containment check with a `path.resolve` + `path.relative` based guard and add traversal regression coverage.
+- Gate structured `reviewOptions` passing behind an adapter capability check so string-only adapters like built-in `codex` still receive a string prompt.
+- Derive `UI_DIR` from `fileURLToPath(import.meta.url)` for Windows-safe path handling across all supported Node 20 runtimes.
+- Handle `createReadStream()` errors explicitly and add a server test for post-open stream failures.
+- Rerun review: yes

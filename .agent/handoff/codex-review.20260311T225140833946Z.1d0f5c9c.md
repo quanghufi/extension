@@ -1,0 +1,26 @@
+# Codex Review
+
+## Overview
+- Status: has_findings
+- Summary: Two material issues remain in `src/hub/session.js`, both in terminal-state reconciliation for agents that never emitted a `done` event.
+- Findings: 2
+
+## Key Findings
+
+### 1. [MEDIUM] Reconciliation writes session-level terminal reasons into `agent.status`, outside the documented agent status values
+- Location: src/hub/session.js:177
+- Why it matters: `AgentRegistry` documents `agent.status` as `'ok' | 'failed' | 'timeout' | null`, but `_reconcileAgentStates()` writes `'partial_completion'` and `'cancelled'` into that field. This is not just a comment mismatch: `session.agents` is serialized in `toJSON()` and reloaded in `fromJSON()`, so downstream code receives values outside the declared agent-status contract. That makes the runtime shape inconsistent and increases the chance of misclassification when consumers branch on the documented status values.
+- Recommended fix: Keep `agent.status` limited to agent-level completion outcomes such as `ok`, `failed`, `timeout`, or `null`. If session-level closure reasons need to be preserved for unfinished agents, store them in a separate field or derive them from `session.state`/`agent.state` instead of overloading `agent.status`. Add a regression test covering `partial_completion` and `cancelled` finalization to assert serialized agent records stay within the documented status set.
+- Confidence: high
+
+### 2. [MEDIUM] Reconciliation assigns the session-wide finding total to unfinished agents
+- Location: src/hub/session.js:178
+- Why it matters: This is still a real bug in the current codebase, not just a hypothetical multi-agent future. `scripts/e2e-test.js` explicitly runs multiple adapters in parallel and calls `session.finalize(finalState, allFindings)` after collecting a combined finding list. If one adapter throws before its `done` status event, `_reconcileAgentStates()` marks that still-running agent as closed and sets `agent.findingCount = this.allFindings.length`, which attributes every finding from the other adapters to the failed/incomplete agent. That corrupts persisted per-agent results and any UI/API consumer that reads `session.agents`.
+- Recommended fix: Do not backfill unfinished agents with `this.allFindings.length`. Preserve the agent's existing `findingCount` if present, or derive a per-agent count from the event/finding map used during finalize. Add a regression test that registers two agents, lets only one emit `done` with findings, finalizes as `partial_completion`, and asserts the unfinished agent does not inherit the other agent's finding count.
+- Confidence: high
+
+## Recommendations
+- Update `_reconcileAgentStates()` so unfinished agents keep per-agent metrics instead of inheriting session-wide totals.
+- Separate session terminal reasons from per-agent `status`, or map reconciled values back into the existing agent-status domain.
+- Add regression tests for terminal reconciliation when an agent is still running at finalize time, especially `partial_completion` and `cancelled` cases.
+- Rerun review: yes

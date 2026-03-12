@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Multi-agent communication hub that enables AI agents (Antigravity, Codex CLI, Claude Code CLI) to collaborate on code review through a structured event-driven architecture.
+Multi-agent communication hub that enables AI agents (Antigravity, Codex CLI) to collaborate on code review through a structured event-driven architecture.
 
 **Status:** Phase 0 Spike — INCOMPLETE (needs rerun with corrected tests)
 
@@ -12,7 +12,6 @@ Multi-agent communication hub that enables AI agents (Antigravity, Codex CLI, Cl
 - **Language:** JavaScript (migrating to TypeScript in Phase 1)
 - **Agent CLIs:**
   - `codex review "prompt"` — Codex reviewer
-  - `claude -p --no-session-persistence "prompt"` — Claude Code reviewer
 - **Encoding:** UTF-8 enforced end-to-end
 
 ## Project Structure
@@ -25,9 +24,7 @@ d:\extension\
 │   ├── spike-results.json # Automated test output (evidence)
 │   └── ideas.md          # Brainstorm notes
 ├── scripts/
-│   ├── spike-test.js     # Phase 0 test script (v1)
-│   ├── spike-test-v2.js  # Phase 0 test script (v2, had hasOutput bug)
-│   └── spike-test-v3.js  # Phase 0 test script (v3, all Codex fixes applied) ★
+│   └── e2e-test.js       # E2E integration test
 ├── .feedback/
 │   ├── inbox.md          # Codex critique round 1 (6 findings)
 │   ├── inbox-v2.md       # Codex critique round 2 (8 findings)
@@ -53,13 +50,10 @@ Ready for Phase 1 — Event-Driven Hub.
 - **Evidence in repo wins** — manual runs outside repo are weak evidence
 - **UTF-8 enforcement** — explicit decode, not hope
 - **Immutable snapshots** — reviewers run on read-only copies (Phase 1)
-- `--output-format json` **WORKS** — was MCP overhead, not Claude bug (spike v3 evidence)
-- `--output-format stream-json` requires `--verbose` flag
 - **Codex output goes to stderr** — `stdoutBytes: 0, stderrBytes: 61838` (spike v3 evidence)
-- **3-tier timeout** — `firstByte/idle/hard` (Codex: 45s/20s/90s, Claude: 90s/30s/120s)
+- **3-tier timeout** — `firstByte/idle/hard` (Codex: 45s/20s/90s)
 - **`--skip-git-repo-check` does NOT exist** — removed from all commands
 - **Use spawn(shell:false)** — not exec(); cross-spawn for Windows
-- **Claude MCP overhead** — create reviewer profile with zero MCP servers
 
 ## Conventions
 
@@ -83,7 +77,6 @@ Ready for Phase 1 — Event-Driven Hub.
 ## Important: Do NOT
 
 - Modify `docs/spike-results.json` — this is evidence from automated test
-- Assume `--output-format json` works for Claude CLI (needs re-test in clean env)
 - Count TIMEOUT as a passing test
 - Use `--skip-git-repo-check` flag for Codex (doesn't exist)
 - Use `exec()` for production — use `spawn(shell:false)` instead

@@ -1,39 +1,90 @@
 {
-  "updated_at": "2026-03-08T21:28:00+07:00",
+  "updated_at": "2026-03-11T21:50:00+07:00",
   "working_on": {
-    "feature": "Phase 2: Adapter Layer",
-    "task": "Phase 2.02 GenericAdapter + AdapterRegistry — COMPLETE",
+    "feature": "Codex Review Loop — Phase 4 + 5",
+    "task": "Completed 5-round review loop for Phase 5 (server.js). All 8 bugs fixed, 8 rebuttals won.",
     "status": "done",
     "files": [
-      "src/adapters/generic-adapter.js",
-      "src/adapters/adapter-registry.js",
-      "src/adapters/generic-adapter.test.js",
-      "src/adapters/adapter-registry.test.js"
+      "src/server.js",
+      "src/api-routes.js",
+      "src/ui/index.html",
+      ".agents/workflows/codex-review-loop.md"
     ],
     "blockers": [],
-    "notes": "All 235 tests pass (53 new). Next: wire registry into e2e-test.js or plan Phase 3."
+    "notes": "13/13 server tests pass. All Codex rejected findings withdrawn (100% rebuttal win rate). Workflow updated with cleanup step."
   },
   "pending_tasks": [
-    { "task": "Wire AdapterRegistry into scripts/e2e-test.js", "priority": "low", "notes": "Optional — replace hardcoded imports" },
-    { "task": "Phase 3 planning — Event-Driven Hub", "priority": "medium", "notes": "Per AGENTS.md, ready for Phase 1 (event hub)" }
+    {
+      "task": "Implement Phase 05: Resilient Sessions",
+      "priority": "high",
+      "notes": "Cancel, retry, reconnect flows. Plan at plans/260308-1959-phase2-polish/phase-05-resilient-sessions.md"
+    },
+    {
+      "task": "Implement Phase 04: Code Annotation Viewer",
+      "priority": "high",
+      "notes": "Plan reviewed through Codex rounds. Key: file API, syntax highlighting, XSS safety, IDE links."
+    },
+    {
+      "task": "Fix remaining lint errors in session.js",
+      "priority": "low",
+      "notes": "Pre-existing: _groupFindings {} type errors, fromJSON null/undefined mismatches. Not blocking."
+    }
   ],
   "recent_changes": [
     {
-      "timestamp": "2026-03-08T21:00:00+07:00",
-      "type": "feature",
-      "description": "Created GenericAdapter — config-driven CLI wrapper with multi-strategy parsing",
-      "files": ["src/adapters/generic-adapter.js", "src/adapters/generic-adapter.test.js"]
+      "timestamp": "2026-03-11T21:00:00+07:00",
+      "type": "bugfix",
+      "description": "Phase 4 review: Fixed XSS in index.html (escapeHtml), separated 400/500 error codes in api-routes.js, validated NaN after param",
+      "files": [
+        "src/api-routes.js",
+        "src/ui/index.html"
+      ]
     },
     {
-      "timestamp": "2026-03-08T21:15:00+07:00",
+      "timestamp": "2026-03-11T21:30:00+07:00",
+      "type": "bugfix",
+      "description": "Phase 5 review (5 rounds): Fixed 8 bugs in server.js — session save after finalize, start() reject on bind error, catch terminal status event, path traversal bypass, reviewOptions guard for MCP-only, bind 127.0.0.1, isFile check, removeListener instead of removeAllListeners",
+      "files": [
+        "src/server.js"
+      ]
+    },
+    {
+      "timestamp": "2026-03-11T21:48:00+07:00",
       "type": "feature",
-      "description": "Created AdapterRegistry — central adapter registry with codex/claude-code presets",
-      "files": ["src/adapters/adapter-registry.js", "src/adapters/adapter-registry.test.js"]
+      "description": "Added Step 3.1 cleanup to codex-review-loop workflow: delete all session data after tổng kết",
+      "files": [
+        ".agents/workflows/codex-review-loop.md"
+      ]
+    }
+  ],
+  "errors_encountered": [
+    {
+      "error": "Codex MCP adapter stalls (3 consecutive times)",
+      "context": "Creating review sessions via Hub API, Codex process never completes. watchdog.stalled=true",
+      "solution": "Restart Hub server (node src/server.js). Fresh restart resolves the stall.",
+      "resolved": true
     }
   ],
   "decisions_made": [
-    { "decision": "Multi-strategy parsing order: JSON array → wrapped JSON → NDJSON → text", "reason": "Prefer structured formats, graceful fallback" },
-    { "decision": "Pre-register codex+claude-code at module import", "reason": "Zero-config for common agents" },
-    { "decision": "Export presets as objects, not register automatically", "reason": "Consumers decide when to register ESLint/Semgrep" }
+    {
+      "decision": "Bind server to 127.0.0.1 instead of 0.0.0.0",
+      "reason": "Codex Round 3 finding — no reason to expose unauthenticated Hub API on LAN"
+    },
+    {
+      "decision": "Guard reviewOptions with agentId.startsWith('mcp-')",
+      "reason": "Legacy codex adapter still registered, expects string prompt. Only MCP adapters handle structured reviewOptions."
+    },
+    {
+      "decision": "Reject CORS wildcard finding as standard for localhost dev tools",
+      "reason": "vite, webpack-dev-server all use Access-Control-Allow-Origin:*. Rebuttal won — Codex withdrew."
+    },
+    {
+      "decision": "Reject static file stream TOCTOU as purely theoretical",
+      "reason": "Localhost dashboard serves 2-3 immutable files. Rejected 3 times, Codex withdrew 3 times."
+    },
+    {
+      "decision": "Add session cleanup step to codex-review-loop workflow",
+      "reason": "After 5-round review, session data accumulates. Step 3.1 ensures clean Hub data."
+    }
   ]
 }

@@ -1,0 +1,24 @@
+# Dev-only directories
+.agent/
+.agents/
+.brain/
+.feedback/
+.git/
+.vscode/
+docs/
+plans/
+scripts/
+tmp/
+data/
+node_modules/
+
+# Tests
+src/**/*.test.js
+src/mcp/tests/
+src/mcp/__pycache__/
+
+# Config/meta files
+AGENTS.md
+SKILL.md
+.gitignore
+.npmignore

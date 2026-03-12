@@ -1,0 +1,46 @@
+# Codex Review
+
+## Overview
+- Status: has_findings
+- Summary: 5 material issues in `src/server.js`: adapter argument regression, unsafe rerun path handling, cross-origin POST exposure, missing child-process shutdown, and missing session persistence during lifecycle transitions.
+- Findings: 5
+
+## Key Findings
+
+### 1. [HIGH] `reviewOptions` are passed to every adapter as an object, which breaks non-MCP adapters
+- Location: src/server.js:134
+- Why it matters: `BaseAdapter.execute()` and the built-in `codex` adapter expect `prompt` to be a string. After this change, any session that sets `reviewOptions` and uses `codex` or another non-MCP adapter will receive an object instead, producing malformed commands or runtime failures in create/rerun flows.
+- Recommended fix: Only build the object form when `agentId === 'mcp-codex'`. For every other adapter, pass `session.prompt` unchanged. Add a regression test that creates a session with `agentId: 'codex'` plus `reviewOptions` and verifies the adapter still receives a string prompt.
+- Confidence: high
+
+### 2. [HIGH] Reruns can point execution at an arbitrary filesystem path
+- Location: src/server.js:137
+- Why it matters: `runSession()` blindly executes against `session.snapshotPath` when present. The new rerun route accepts caller-controlled snapshot paths, so a client can steer the reviewer to any readable directory on the host, bypassing the project boundary and the repo's immutable-snapshot design.
+- Recommended fix: Validate the execution path before calling `adapter.execute()`. Restrict it to either a snapshot created by `SnapshotManager` or the original `projectDir`, reject non-existent paths, and reject any path outside the allowed roots. Add an API test that POST `/rerun` with an out-of-tree path is rejected.
+- Confidence: high
+
+### 3. [HIGH] New POST routes are exposed to any origin with no authentication or CSRF protection
+- Location: src/server.js:175
+- Why it matters: The server sends `Access-Control-Allow-Origin: *` and now exposes `/findings/evaluate` and `/rerun` as POST endpoints. Any website the user visits can issue cross-origin requests to the local hub and trigger re-reviews, mutate evaluation state, or force access to attacker-chosen paths.
+- Recommended fix: Replace the wildcard CORS policy with an allowlist for the local dashboard origin, and require an unguessable auth token or CSRF token on state-changing endpoints before wiring these routes. Add tests that disallowed origins and missing auth are rejected for both new POST endpoints.
+- Confidence: high
+
+### 4. [MEDIUM] Server shutdown does not stop in-flight review processes
+- Location: src/server.js:84
+- Why it matters: `stop()` closes HTTP/WebSocket listeners only. Active adapter executions, including the new default MCP Python process and downstream Codex process, can continue running after shutdown, leaking resources and leaving sessions in an undefined state.
+- Recommended fix: Track active executions in `HubServer` and add cancellation/cleanup hooks so `stop()` terminates child processes, marks sessions cancelled/failed, persists the final state, and waits for cleanup before resolving. Add a shutdown test that starts a session, calls `stop()`, and verifies the spawned process exits.
+- Confidence: medium
+
+### 5. [MEDIUM] Session state changes during execution are never persisted
+- Location: src/server.js:122
+- Why it matters: The session is saved once at creation, but `runSession()` does not save after `start()`, after streamed events, or after `finalize()`. If the server restarts during or after a run, reconnecting clients will load stale session data (often still `pending`) and lose findings/retry state.
+- Recommended fix: Persist the session after transitioning to running, after appending events that must survive reconnects, and after finalization/error handling. At minimum, save after the start event and after `session.finalize(...)`. Add a restart/reload test proving a completed rerun session still shows the final state and findings when reloaded from disk.
+- Confidence: high
+
+## Recommendations
+- Gate the structured `promptArg` path to `mcp-codex` only and add adapter compatibility tests.
+- Enforce execution-path validation so reruns can only target approved snapshots or the original project directory.
+- Lock down state-changing HTTP routes with origin restrictions plus auth/CSRF protection.
+- Introduce execution tracking and child-process cancellation so `stop()` performs deterministic cleanup.
+- Persist session lifecycle updates to disk and add restart/reconnect regression coverage.
+- Rerun review: yes

@@ -15,7 +15,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { SessionStore } from './hub/session-store.js';
 import { SnapshotManager } from './snapshot/snapshot-manager.js';
-import { apiListSessions, apiCreateSession, apiGetSession, apiDeleteSession, apiGetEvents, apiGetFindings } from './api-routes.js';
+import { apiListSessions, apiCreateSession, apiGetSession, apiDeleteSession, apiGetEvents, apiGetFindings, apiEvaluateFindings, apiRerunSession } from './api-routes.js';
 import { handleWsConnection, broadcastEvent } from './ws-handler.js';
 import { getAdapter } from './adapters/adapter-registry.js';
 import { createEvent } from './schema/events.js';
@@ -62,13 +62,16 @@ export class HubServer {
      * @returns {Promise<void>}
      */
     start() {
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
             this._server = http.createServer((req, res) => this._handleHttp(req, res));
 
             this._wss = new WebSocketServer({ server: this._server });
             this._wss.on('connection', (ws) => handleWsConnection(ws, this));
 
-            this._server.listen(this.port, () => {
+            const onStartupError = (err) => reject(err);
+            this._server.once('error', onStartupError);
+            this._server.listen(this.port, '127.0.0.1', () => {
+                this._server?.removeListener('error', onStartupError);
                 console.log(`🚀 Hub server running at http://localhost:${this.port}`);
                 console.log(`   REST API: http://localhost:${this.port}/api/sessions`);
                 console.log(`   Dashboard: http://localhost:${this.port}/`);
@@ -124,13 +127,19 @@ export class HubServer {
             console.log(`[Orchestrator] Broadcasting: ${startEvent.event_type} - ${startEvent.payload.state}`);
             this.broadcast(sessionId, session.addEvent(startEvent));
 
-            // Use agent specified in session prompt or default to codex
-            const agentId = session.agentId ?? 'codex';
+            // Use MCP-backed Codex by default unless a specific adapter is requested.
+            const agentId = session.agentId ?? 'mcp-codex';
             const adapter = getAdapter(agentId);
             session.registerAgent(agentId);
             console.log(`[Orchestrator] Executing adapter: ${agentId}`);
 
-            const { stream, done } = adapter.execute(sessionId, session.projectDir, session.prompt);
+            // For MCP-based adapters, pass reviewOptions as prompt object
+            const isMcpAdapter = agentId.startsWith('mcp-');
+            const promptArg = (isMcpAdapter && session.reviewOptions)
+                ? { prompt: session.prompt, .../** @type {object} */ (session.reviewOptions) }
+                : session.prompt;
+            const executionPath = session.snapshotPath ?? session.projectDir;
+            const { stream, done } = adapter.execute(sessionId, executionPath, promptArg);
             console.log(`[Orchestrator] Adapter execution started, got stream and done promise.`);
 
             for await (const event of stream) {
@@ -144,6 +153,7 @@ export class HubServer {
             const doneEvent = createEvent(sessionId, 'system', 'status', { state: finalState });
             this.broadcast(sessionId, session.addEvent(doneEvent));
             session.finalize(finalState, result.findings);
+            this.store.save(session);
 
         } catch (err) {
             console.error(`runSession error for ${sessionId}:`, err);
@@ -151,7 +161,10 @@ export class HubServer {
                 const message = err instanceof Error ? err.message : String(err);
                 const errorEvent = createEvent(sessionId, 'system', 'error', { message });
                 this.broadcast(sessionId, session.addEvent(errorEvent));
+                const failedEvent = createEvent(sessionId, 'system', 'status', { state: 'failed' });
+                this.broadcast(sessionId, session.addEvent(failedEvent));
                 session.finalize('failed');
+                this.store.save(session);
             }
         }
     }
@@ -200,6 +213,14 @@ export class HubServer {
             const id = url.pathname.split('/')[3] ?? '';
             return apiGetFindings(this, id, res);
         }
+        if (url.pathname.match(/^\/api\/sessions\/[^/]+\/findings\/evaluate$/) && method === 'POST') {
+            const id = url.pathname.split('/')[3] ?? '';
+            return apiEvaluateFindings(this, id, req, res);
+        }
+        if (url.pathname.match(/^\/api\/sessions\/[^/]+\/rerun$/) && method === 'POST') {
+            const id = url.pathname.split('/')[3] ?? '';
+            return apiRerunSession(this, id, req, res);
+        }
 
         // Static file serving for UI
         return this._serveStatic(url.pathname, res);
@@ -216,13 +237,14 @@ export class HubServer {
         filePath = path.join(UI_DIR, filePath);
 
         // Security: prevent path traversal
-        if (!filePath.startsWith(UI_DIR)) {
+        const normalizedUiDir = UI_DIR + path.sep;
+        if (!filePath.startsWith(normalizedUiDir) && filePath !== path.join(UI_DIR, 'index.html')) {
             res.writeHead(403);
             res.end('Forbidden');
             return;
         }
 
-        if (!fs.existsSync(filePath)) {
+        if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
             res.writeHead(404);
             res.end('Not found');
             return;

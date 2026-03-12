@@ -1,41 +1,151 @@
 {
-  "meta": { "schema_version": "1.1.0", "awf_version": "4.0.2" },
+  "meta": {
+    "schema_version": "1.1.0",
+    "awf_version": "4.0.2"
+  },
   "project": {
-    "name": "extension",
-    "description": "Multi-agent communication hub — AI agents (Antigravity, Codex CLI, Claude Code CLI) collaborate on code review via event-driven architecture",
+    "name": "extension-hub",
+    "description": "Multi-agent communication hub — AI agents (Antigravity, Codex via MCP) collaborate on code review via event-driven architecture",
     "type": "developer-tool",
-    "status": "Phase 2 — Adapter Layer",
+    "status": "Phase 1 Complete, Phase 2 In Progress, Phase 4+5 Reviewed",
     "created_at": "2026-03-08T11:27:26+07:00"
   },
   "tech_stack": {
-    "runtime": "Node.js 20+",
-    "language": "JavaScript (TypeScript migration planned Phase 1+)",
-    "testing": "node:test (built-in)",
+    "runtime": "Node.js 20+ ESM",
+    "language": "JavaScript (JSDoc types, no build step)",
+    "testing": "node:test (built-in) — 30 session + 13 server + 5 rebuttal tests passing",
+    "websocket": "ws library",
     "process": "cross-spawn (shell:false)",
-    "encoding": "UTF-8 enforced end-to-end"
+    "encoding": "UTF-8 enforced end-to-end",
+    "ui": "Vanilla JS single-file dashboard",
+    "snapshot": "git worktree + attrib/icacls"
   },
   "features": [
-    { "name": "Phase 0: Spike", "status": "complete", "description": "Validated Codex/Claude CLI interaction" },
-    { "name": "Phase 2.01: Base Adapters", "status": "complete", "description": "BaseAdapter, CodexAdapter, ClaudeCodeAdapter" },
-    { "name": "Phase 2.02: Generic Adapter + Registry", "status": "complete", "description": "GenericAdapter (config-driven) + AdapterRegistry (central factory)" }
+    {
+      "name": "Phase 0: Spike",
+      "status": "complete",
+      "description": "Validated Codex/Claude CLI interaction"
+    },
+    {
+      "name": "Phase 1: Core Hub",
+      "status": "complete",
+      "description": "HubServer, Session, EventStore, WebSocket streaming, REST API, Dashboard UI — 172/172 tests"
+    },
+    {
+      "name": "Phase 2.01: Base Adapters",
+      "status": "complete",
+      "description": "BaseAdapter, CodexAdapter, ClaudeCodeAdapter"
+    },
+    {
+      "name": "Phase 2.02: Generic Adapter + Registry",
+      "status": "complete",
+      "description": "GenericAdapter (config-driven) + AdapterRegistry (central factory)"
+    },
+    {
+      "name": "Live Debug Demo",
+      "status": "working",
+      "description": "live-debug-demo.js — spawns both CLIs, streams to dashboard, writes .feedback inbox"
+    },
+    {
+      "name": "Plan Consultation",
+      "status": "working",
+      "description": "consult-plan.js — asks both CLIs for plan opinions via Hub server"
+    },
+    {
+      "name": "Phase 2.03: MCP Adapter + Codex Review",
+      "status": "complete",
+      "description": "MCP bridge adapter for Codex CLI, session-scoped review via Hub server API"
+    },
+    {
+      "name": "Phase 2.04: Session Label + Evaluate/Rerun",
+      "status": "complete",
+      "description": "Human-readable session labels, evaluate→rerun feedback chain, auto-label on retry, createRetry forwards all config"
+    },
+    {
+      "name": "Code Annotation Viewer (Phase 04 Plan)",
+      "status": "planned",
+      "description": "phase-04-code-annotation.md — file viewer with syntax highlighting, IDE links, XSS safety. Reviewed through Codex rounds."
+    },
+    {
+      "name": "Phase 4+5 Codex Review Loop",
+      "status": "complete",
+      "description": "5-round Codex review of server.js: 8 bugs fixed (session save, start() reject, path traversal, bind 127.0.0.1, isFile check, removeListener). 8/8 rebuttals won."
+    }
   ],
+  "scripts": {
+    "demo:live-debug": "node scripts/live-debug-demo.js [--port N]",
+    "demo:both-agents": "node scripts/demo-both-agents.js",
+    "consult:plan": "node scripts/consult-plan.js [--port N]"
+  },
   "decisions": [
-    { "decision": "Use spawn(shell:false) not exec()", "reason": "Security + cross-platform" },
-    { "decision": "3-tier timeout: firstByte/idle/hard", "reason": "Codex: 45s/20s/90s, Claude: 90s/30s/120s" },
-    { "decision": "Codex output goes to stderr", "reason": "stdoutBytes: 0, stderrBytes: 61838 (spike v3 evidence)" },
-    { "decision": "GenericAdapter multi-strategy parsing", "reason": "JSON→wrapped-JSON→NDJSON→text fallback chain" },
-    { "decision": "AdapterRegistry pre-registers codex+claude-code at import", "reason": "Ready-to-use without manual setup" }
+    {
+      "decision": "Use spawn(shell:false) not exec()",
+      "reason": "Security + cross-platform"
+    },
+    {
+      "decision": "3-tier timeout: firstByte/idle/hard",
+      "reason": "Codex: 45s/20s/90s, Claude: 90s/30s/120s"
+    },
+    {
+      "decision": "Codex output goes to stderr",
+      "reason": "stdoutBytes: 0, stderrBytes: 61838 (spike v3 evidence)"
+    },
+    {
+      "decision": "GenericAdapter multi-strategy parsing",
+      "reason": "JSON→wrapped-JSON→NDJSON→text fallback chain"
+    },
+    {
+      "decision": "AdapterRegistry pre-registers codex+claude-code at import",
+      "reason": "Ready-to-use without manual setup"
+    },
+    {
+      "decision": "Hub-assigned seq for event ordering",
+      "reason": "Codex critique round 3 — client clocks unreliable"
+    },
+    {
+      "decision": "Layered snapshot enforcement (attrib +R/icacls)",
+      "reason": "Prevent agents from modifying source during review"
+    },
+    {
+      "decision": "Session label field for human-readable tracking",
+      "reason": "UUID session IDs impossible to track. Label shows 'Review Phase-04 Round 1' in dropdown."
+    },
+    {
+      "decision": "Evaluate→rerun API chain for review feedback",
+      "reason": "Each round was independent, Codex never received agree/disagree. Now: POST /evaluate → POST /rerun."
+    },
+    {
+      "decision": "createRetry forwards all config",
+      "reason": "Old createRetry only forwarded prompt. Now forwards agentId, reviewOptions, snapshotPath, round, label."
+    }
   ],
   "knowledge_items": {
     "gotchas": [
       "--skip-git-repo-check does NOT exist for Codex",
       "--output-format stream-json requires --verbose flag",
-      "Check combinedBytes (stdout+stderr) not just stdoutBytes for pass/fail"
+      "Check combinedBytes (stdout+stderr) not just stdoutBytes for pass/fail",
+      "Codex '9router' provider needs explicit OPENAI_API_KEY env var when spawned from Node.js",
+      "Claude Code -p mode with --output-format json returns structured_output field, not result text",
+      "Claude Code exit code null is normal — check is_error:false instead",
+      "raw_output broadcast should NOT truncate (was 1200 char limit, caused data loss)",
+      "Duplicate method definitions in JS class: later definition silently overrides earlier one at runtime. TS lint shows 'Duplicate function implementation' but easy to miss.",
+      "Rerun with rebuttals context can cause Codex to return 0 findings (too aggressive context). Fresh run on same file produces 7-8 findings. Rerun prompt needs tuning.",
+      "PowerShell ConvertTo-Json truncates nested objects. Use -Depth 3+ for complex request bodies.",
+      "Claude Code CLI removed from project — only Codex via MCP adapter now",
+      "path.join + startsWith can be tricked by sibling dirs sharing prefix (ui vs ui-secret). Fix: startsWith(dir + path.sep)",
+      "http.Server.listen(port) without host binds to 0.0.0.0 not 127.0.0.1. Always specify '127.0.0.1' for localhost-only.",
+      "removeAllListeners('error') removes ALL error handlers, not just yours. Use named function + removeListener(fn).",
+      "existsSync returns true for directories. Always check statSync().isFile() before createReadStream.",
+      "Codex MCP adapter can stall — Hub watchdog detects via idleMs > 45s. Fix: restart Hub server.",
+      "Codex keeps re-raising the same finding with different framing after withdrawal. Stream error raised 3x, withdrawn 3x.",
+      "PowerShell `exit` in inline code (run_command) kills entire shell process. Use `break` + `$result` variable instead. Only use `exit` in .ps1 script files."
     ],
     "conventions": [
       "Vietnamese comments/docs normal (bilingual project)",
       "Agent feedback in .feedback/, run logs in .agents/runs/",
-      "File splitting: warn >200 LOC, must split >300 LOC"
+      "File splitting: warn >200 LOC, must split >300 LOC",
+      "Session data in tmp/<script>-data/sessions/*.json",
+      "Full combined output saved to tmp/consult-*-combined.txt"
     ]
   }
 }

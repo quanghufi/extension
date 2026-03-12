@@ -34,7 +34,7 @@ describe('Session.addEvent', () => {
         s.start();
 
         const e1 = s.addEvent(createEvent(s.id, 'codex', 'status', { state: 'started' }));
-        const e2 = s.addEvent(createEvent(s.id, 'claude-code', 'status', { state: 'started' }));
+        const e2 = s.addEvent(createEvent(s.id, 'semgrep', 'status', { state: 'started' }));
         const e3 = s.addEvent(createEvent(s.id, 'codex', 'heartbeat', {}));
 
         assert.equal(e1.seq, 0);
@@ -173,6 +173,38 @@ describe('Session.createRetry', () => {
         const e = retry.addEvent(createEvent(retry.id, 'codex', 'status', {}));
         assert.equal(e.seq, 0); // Fresh counter
     });
+
+    it('forwards agentId, reviewOptions, snapshotPath, round', () => {
+        const parent = new Session({
+            projectDir: '/p',
+            prompt: 'review',
+            agentId: 'mcp-codex',
+            reviewOptions: { review_target: 'file', file_path: 'a.js' },
+            snapshotPath: '/snap/123',
+            round: 2,
+            label: 'Review X Round 2',
+        });
+        const retry = parent.createRetry();
+
+        assert.equal(retry.agentId, 'mcp-codex');
+        assert.deepStrictEqual(retry.reviewOptions, { review_target: 'file', file_path: 'a.js' });
+        assert.equal(retry.snapshotPath, '/snap/123');
+        assert.equal(retry.round, 3);
+        assert.equal(retry.label, 'Review X Round 3');
+        assert.equal(retry.parentSessionId, parent.id);
+    });
+
+    it('auto-generates label when parent has no label', () => {
+        const parent = new Session({ projectDir: '/p', prompt: 'review' });
+        const retry = parent.createRetry();
+        assert.equal(retry.label, 'Round 2');
+    });
+
+    it('allows label override in retry', () => {
+        const parent = new Session({ projectDir: '/p', prompt: 'review', label: 'Review X Round 1' });
+        const retry = parent.createRetry({ label: 'Custom Label' });
+        assert.equal(retry.label, 'Custom Label');
+    });
 });
 
 describe('Session finding aggregation', () => {
@@ -228,6 +260,19 @@ describe('Session serialization', () => {
         assert.ok(restored.agents.has('codex'));
     });
 
+    it('label roundtrips through toJSON/fromJSON', () => {
+        const s = new Session({ projectDir: '/p', prompt: 'test', label: 'Review Phase-04 Round 1' });
+        const json = s.toJSON();
+        assert.equal(json.label, 'Review Phase-04 Round 1');
+        const restored = Session.fromJSON(json);
+        assert.equal(restored.label, 'Review Phase-04 Round 1');
+    });
+
+    it('fromJSON defaults label to null', () => {
+        const restored = Session.fromJSON({ id: 'x', projectDir: '/p', prompt: 'test' });
+        assert.equal(restored.label, null);
+    });
+
     it('fromJSON handles missing optional fields', () => {
         const minimal = {
             id: 'minimal',
@@ -238,6 +283,37 @@ describe('Session serialization', () => {
         assert.equal(restored.id, 'minimal');
         assert.equal(restored.state, 'pending');
         assert.deepStrictEqual(restored.events, []);
+    });
+});
+
+describe('Session watchdog', () => {
+    it('marks running session as stalled after idle threshold', () => {
+        const s = new Session({ projectDir: '/project', prompt: 'review' });
+        s.start();
+        s.createdAt = '2026-03-11T00:00:00.000Z';
+
+        const watchdog = s.getWatchdogStatus(Date.parse('2026-03-11T00:16:00.000Z'));
+        assert.equal(watchdog.stalled, true);
+        assert.equal(s.getDisplayState(), 'stalled');
+    });
+
+    it('does not mark mcp-codex stalled too early for deep reviews', () => {
+        const s = new Session({ projectDir: '/project', prompt: 'review', agentId: 'mcp-codex' });
+        s.start();
+        s.createdAt = '2026-03-11T00:00:00.000Z';
+
+        const watchdog = s.getWatchdogStatus(Date.parse('2026-03-11T00:02:00.000Z'));
+        assert.equal(watchdog.stalled, false);
+        assert.equal(watchdog.thresholdMs, 900000);
+    });
+
+    it('embeds watchdog and displayState in JSON', () => {
+        const s = new Session({ projectDir: '/project', prompt: 'review' });
+        s.start();
+        const json = s.toJSON();
+
+        assert.ok(json.watchdog);
+        assert.equal(json.displayState, 'running');
     });
 });
 

@@ -184,14 +184,16 @@ export class McpCodexAdapter {
      * @returns {{ cmd: string, args: string[] }}
      */
     buildCommand(snapshotPath, _prompt) {
-        return {
-            cmd: 'python',
-            args: [
-                MCP_SCRIPT,
-                '--workspace', snapshotPath,
-                '--schema', MCP_SCHEMA,
-            ],
-        };
+        const args = [
+            MCP_SCRIPT,
+            '--workspace', snapshotPath,
+            '--schema', MCP_SCHEMA,
+        ];
+        // On Windows, Python subprocess.run needs the .cmd extension
+        if (process.platform === 'win32') {
+            args.push('--codex-command', 'codex.cmd');
+        }
+        return { cmd: 'python', args };
     }
 
     /**
@@ -222,12 +224,32 @@ export class McpCodexAdapter {
      *
      * @param {string} sessionId
      * @param {string} projectDir - Project directory to review
-     * @param {string} prompt - Review prompt (used as instructions)
+     * @param {string|object} prompt - Review prompt string or options object
+     *   Options: { prompt, review_target, file_path, max_findings }
      * @returns {{ stream: AsyncIterable<import('../schema/events.js').Event>, done: Promise<import('../schema/events.js').AdapterResult> }}
      */
     execute(sessionId, projectDir, prompt) {
         const agentId = this.agentId;
         const self = this;
+
+        // Parse review options from prompt
+        /** @type {{ prompt: string, review_target: string, file_path?: string, max_findings: number }} */
+        let reviewOpts;
+        if (typeof prompt === 'object' && prompt !== null) {
+            const opts = /** @type {Record<string, unknown>} */ (prompt);
+            reviewOpts = {
+                prompt: String(opts.prompt || ''),
+                review_target: String(opts.review_target || 'uncommitted'),
+                file_path: opts.file_path ? String(opts.file_path) : undefined,
+                max_findings: Number(opts.max_findings || 10),
+            };
+        } else {
+            reviewOpts = {
+                prompt: String(prompt || ''),
+                review_target: 'uncommitted',
+                max_findings: 10,
+            };
+        }
 
         /** @type {import('../schema/events.js').Event[]} */
         const eventQueue = [];
@@ -380,14 +402,20 @@ export class McpCodexAdapter {
                     text: 'Running Codex review via MCP...',
                 }));
 
+                /** @type {Record<string, unknown>} */
+                const mcpArgs = {
+                    workspace: projectDir,
+                    review_target: reviewOpts.review_target,
+                    max_findings: reviewOpts.max_findings,
+                    instructions: reviewOpts.prompt,
+                };
+                if (reviewOpts.file_path) {
+                    mcpArgs.file_path = reviewOpts.file_path;
+                }
+
                 const reviewResponse = await sendMcpRequest('tools/call', {
                     name: 'run_codex_review',
-                    arguments: {
-                        workspace: projectDir,
-                        review_target: 'uncommitted',
-                        max_findings: 10,
-                        instructions: prompt,
-                    },
+                    arguments: mcpArgs,
                 }, 2);
 
                 // ── Parse Response ───────────────────

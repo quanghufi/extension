@@ -27,7 +27,7 @@ const EVENT_TYPES = /** @type {const} */ (['finding', 'status', 'error', 'heartb
  * NOTE: No `seq` field — Hub assigns it on receipt (R3 finding 5).
  *
  * @param {string} sessionId - Session UUID
- * @param {string} agentId - Agent identifier ('codex' | 'claude-code')
+ * @param {string} agentId - Agent identifier (e.g. 'codex')
  * @param {string} eventType - One of EVENT_TYPES
  * @param {Record<string, unknown>} payload - Event-specific data
  * @returns {Event}
@@ -166,7 +166,7 @@ export function computeDedupeKey({ file, line, summary }) {
  * @typedef {Object} GroupedFinding
  * @property {string} dedupe_key
  * @property {Finding} finding - Representative finding
- * @property {string[]} agents - Which agents found this ['codex', 'claude-code']
+ * @property {string[]} agents - Which agents found this (e.g. ['codex', 'semgrep'])
  * @property {Finding[]} raw_findings - All original per-agent findings
  */
 

@@ -374,6 +374,11 @@ class CodexReviewBridge:
             target = f"Review only the diff between the current branch and base branch '{base_branch}'."
         elif review_target == "commit":
             target = f"Review only the changes introduced by commit '{commit}'."
+        elif review_target == "file":
+            target = (
+                "Review the specified file(s) in their entirety. "
+                "Read each file and analyze for correctness, completeness, security issues, and potential improvements."
+            )
         else:
             target = (
                 "Review the current workspace changes: staged files, unstaged files, and untracked files. "
@@ -428,6 +433,7 @@ class CodexReviewBridge:
         commit: str | None,
         max_findings: int,
         instructions: str | None,
+        file_path: str | None = None,
     ) -> dict[str, Any]:
         if not 1 <= max_findings <= 50:
             raise ValueError("max_findings must be between 1 and 50")
@@ -435,6 +441,8 @@ class CodexReviewBridge:
             raise ValueError("base_branch is required when review_target is 'base'")
         if review_target == "commit" and not commit:
             raise ValueError("commit is required when review_target is 'commit'")
+        if review_target == "file" and not file_path:
+            raise ValueError("file_path is required when review_target is 'file'")
 
         changed_files = None
         if review_target == "uncommitted":
@@ -471,6 +479,10 @@ class CodexReviewBridge:
                     "workspace": str(workspace),
                     "artifacts": artifacts,
                 }
+
+        if review_target == "file":
+            # For file review, pass the file path as tracked files
+            changed_files = {"tracked_files": [file_path], "untracked_files": []}
 
         prompt = self.build_prompt(
             review_target=review_target,
@@ -734,8 +746,12 @@ class CodexReviewBridge:
                         },
                         "review_target": {
                             "type": "string",
-                            "enum": ["uncommitted", "base", "commit"],
+                            "enum": ["uncommitted", "base", "commit", "file"],
                             "description": "What Codex should review.",
+                        },
+                        "file_path": {
+                            "type": "string",
+                            "description": "Relative file path to review when review_target is 'file'.",
                         },
                         "base_branch": {
                             "type": "string",
@@ -918,6 +934,7 @@ def main() -> int:
                         commit=tool_args.get("commit"),
                         max_findings=int(tool_args.get("max_findings", 10)),
                         instructions=tool_args.get("instructions"),
+                        file_path=tool_args.get("file_path"),
                     )
                 elif tool_name == "get_last_codex_review":
                     payload = bridge.get_latest_review(workspace)

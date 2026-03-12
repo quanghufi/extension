@@ -33,11 +33,11 @@ describe('AgentRegistry', () => {
 
     it('valid transition: running → failed', () => {
         const reg = new AgentRegistry();
-        reg.register('claude');
-        reg.transition('claude', 'running');
-        reg.transition('claude', 'failed', { status: 'timeout' });
-        assert.equal(reg.get('claude')?.state, 'failed');
-        assert.equal(reg.get('claude')?.status, 'timeout');
+        reg.register('semgrep');
+        reg.transition('semgrep', 'running');
+        reg.transition('semgrep', 'failed', { status: 'timeout' });
+        assert.equal(reg.get('semgrep')?.state, 'failed');
+        assert.equal(reg.get('semgrep')?.status, 'timeout');
     });
 
     it('valid transition: failed → running (retry)', () => {
@@ -87,14 +87,14 @@ describe('AgentRegistry', () => {
     it('allInState() filters correctly', () => {
         const reg = new AgentRegistry();
         reg.register('codex');
-        reg.register('claude');
+        reg.register('semgrep');
         reg.register('gemini');
         reg.transition('codex', 'running');
-        reg.transition('claude', 'running');
+        reg.transition('semgrep', 'running');
         // gemini stays pending
         const running = reg.allInState('running');
         assert.equal(running.length, 2);
-        assert.deepEqual(running.map(a => a.agentId).sort(), ['claude', 'codex']);
+        assert.deepEqual(running.map(a => a.agentId).sort(), ['semgrep', 'codex']);
         assert.equal(reg.allInState('pending').length, 1);
     });
 
@@ -102,14 +102,14 @@ describe('AgentRegistry', () => {
         const reg = new AgentRegistry();
         reg.register('codex');
         reg.transition('codex', 'running', { startedAt: '2026-01-01T00:00:00Z' });
-        reg.register('claude');
+        reg.register('semgrep');
 
         const json = reg.toJSON();
         const restored = AgentRegistry.fromJSON(json);
 
         assert.equal(restored.get('codex')?.state, 'running');
         assert.equal(restored.get('codex')?.startedAt, '2026-01-01T00:00:00Z');
-        assert.equal(restored.get('claude')?.state, 'pending');
+        assert.equal(restored.get('semgrep')?.state, 'pending');
         assert.ok(restored.has('codex'));
         assert.ok(!restored.has('ghost'));
     });

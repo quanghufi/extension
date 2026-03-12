@@ -1,20 +1,45 @@
 {
   "name": "extension-hub",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "Multi-agent communication hub — AI agents collaborate on code review via event-driven architecture",
   "type": "module",
+  "bin": {
+    "extension-hub": "./bin/extension-hub.js"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "!src/**/*.test.js",
+    "!src/mcp/tests/",
+    "!src/mcp/__pycache__/"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "start": "node src/server.js",
     "test": "node --test src/**/*.test.js",
     "test:unit": "node --test src/**/*.test.js",
     "smoke:codex": "node scripts/codex-smoke.js",
-    "spike": "node scripts/spike-test-v3.cjs",
-    "demo:live-debug": "node scripts/live-debug-demo.js",
     "e2e": "node scripts/e2e-test.js",
     "e2e:codex": "node scripts/e2e-test.js --agent codex",
     "e2e:dry": "node scripts/e2e-test.js --dry-run",
     "mcp:codex": "python src/mcp/codex_review_mcp.py",
-    "test:mcp": "python -m pytest src/mcp/tests/ -v"
+    "test:mcp": "python -m pytest src/mcp/tests/ -v",
+    "pack:smoke": "npm pack && echo 'Tarball created — verify contents with: tar tzf extension-hub-*.tgz'"
   },
+  "keywords": [
+    "ai",
+    "agent",
+    "code-review",
+    "multi-agent",
+    "hub",
+    "codex",
+    "websocket",
+    "mcp"
+  ],
+  "license": "MIT",
+  "author": "quanghufi",
   "dependencies": {
     "cross-spawn": "^7.0.6",
     "ws": "^8.18.0",

@@ -26,16 +26,9 @@ describe('Built-in adapters', () => {
         assert.equal(adapter.agentId, 'codex');
     });
 
-    it('pre-registers claude-code adapter', () => {
-        assert.ok(hasAdapter('claude-code'));
-        const adapter = getAdapter('claude-code');
-        assert.equal(adapter.agentId, 'claude-code');
-    });
-
-    it('lists both built-in adapters', () => {
+    it('lists built-in adapters', () => {
         const ids = listAdapters();
         assert.ok(ids.includes('codex'));
-        assert.ok(ids.includes('claude-code'));
     });
 });
 
@@ -121,7 +114,6 @@ describe('getAdapter', () => {
             assert.fail('Should have thrown');
         } catch (err) {
             assert.ok(err.message.includes('codex'));
-            assert.ok(err.message.includes('claude-code'));
         }
     });
 });
@@ -160,7 +152,6 @@ describe('resetRegistry', () => {
 
         assert.ok(!hasAdapter('custom'));
         assert.ok(hasAdapter('codex'));
-        assert.ok(hasAdapter('claude-code'));
     });
 });
 

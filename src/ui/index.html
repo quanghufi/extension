@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -19,11 +20,14 @@
             --medium: #eab308;
             --low: #22c55e;
             --codex: #a78bfa;
-            --claude: #60a5fa;
             --radius: 10px;
         }
 
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
 
         body {
             font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
@@ -49,7 +53,7 @@
         .header h1 {
             font-size: 18px;
             font-weight: 700;
-            background: linear-gradient(135deg, var(--accent), var(--claude));
+            background: linear-gradient(135deg, var(--accent), var(--codex));
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             display: flex;
@@ -66,8 +70,15 @@
             letter-spacing: 0.5px;
         }
 
-        .status-badge.connected { background: rgba(34, 197, 94, 0.15); color: var(--low); }
-        .status-badge.disconnected { background: rgba(239, 68, 68, 0.15); color: var(--critical); }
+        .status-badge.connected {
+            background: rgba(34, 197, 94, 0.15);
+            color: var(--low);
+        }
+
+        .status-badge.disconnected {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--critical);
+        }
 
         /* ── Layout ─────────────────────── */
         .container {
@@ -80,7 +91,9 @@
         }
 
         @media (max-width: 1024px) {
-            .container { grid-template-columns: 1fr; }
+            .container {
+                grid-template-columns: 1fr;
+            }
         }
 
         /* ── Cards ──────────────────────── */
@@ -104,10 +117,15 @@
             letter-spacing: 0.5px;
         }
 
-        .card-body { padding: 16px 20px; }
+        .card-body {
+            padding: 16px 20px;
+        }
 
         /* ── Timeline ───────────────────── */
-        .timeline { max-height: 60vh; overflow-y: auto; }
+        .timeline {
+            max-height: 60vh;
+            overflow-y: auto;
+        }
 
         .timeline-event {
             padding: 12px 20px;
@@ -119,11 +137,20 @@
             transition: background 0.15s;
         }
 
-        .timeline-event:hover { background: var(--surface2); }
+        .timeline-event:hover {
+            background: var(--surface2);
+        }
 
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(-4px); }
-            to { opacity: 1; transform: translateY(0); }
+            from {
+                opacity: 0;
+                transform: translateY(-4px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         .event-seq {
@@ -143,12 +170,28 @@
             text-align: center;
         }
 
-        .event-agent.codex { background: rgba(167, 139, 250, 0.15); color: var(--codex); }
-        .event-agent.claude-code { background: rgba(96, 165, 250, 0.15); color: var(--claude); }
+        .event-agent.codex {
+            background: rgba(167, 139, 250, 0.15);
+            color: var(--codex);
+        }
 
-        .event-content { flex: 1; font-size: 13px; line-height: 1.5; }
-        .event-type { color: var(--text-dim); font-size: 11px; }
-        .event-time { color: var(--text-dim); font-size: 11px; white-space: nowrap; }
+
+        .event-content {
+            flex: 1;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .event-type {
+            color: var(--text-dim);
+            font-size: 11px;
+        }
+
+        .event-time {
+            color: var(--text-dim);
+            font-size: 11px;
+            white-space: nowrap;
+        }
 
         /* ── Findings Table ──────────────── */
         .findings-table {
@@ -174,7 +217,9 @@
             vertical-align: top;
         }
 
-        .findings-table tr:hover { background: var(--surface2); }
+        .findings-table tr:hover {
+            background: var(--surface2);
+        }
 
         .severity-dot {
             width: 8px;
@@ -184,12 +229,28 @@
             margin-right: 6px;
         }
 
-        .severity-dot.critical { background: var(--critical); box-shadow: 0 0 6px var(--critical); }
-        .severity-dot.high { background: var(--high); }
-        .severity-dot.medium { background: var(--medium); }
-        .severity-dot.low { background: var(--low); }
+        .severity-dot.critical {
+            background: var(--critical);
+            box-shadow: 0 0 6px var(--critical);
+        }
 
-        .agent-badges { display: flex; gap: 4px; flex-wrap: wrap; }
+        .severity-dot.high {
+            background: var(--high);
+        }
+
+        .severity-dot.medium {
+            background: var(--medium);
+        }
+
+        .severity-dot.low {
+            background: var(--low);
+        }
+
+        .agent-badges {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
 
         .agent-badge {
             font-size: 10px;
@@ -198,8 +259,11 @@
             font-weight: 600;
         }
 
-        .agent-badge.codex { background: rgba(167, 139, 250, 0.2); color: var(--codex); }
-        .agent-badge.claude-code { background: rgba(96, 165, 250, 0.2); color: var(--claude); }
+        .agent-badge.codex {
+            background: rgba(167, 139, 250, 0.2);
+            color: var(--codex);
+        }
+
 
         /* ── Agent Status ───────────────── */
         .agent-card {
@@ -221,12 +285,25 @@
             font-size: 14px;
         }
 
-        .agent-icon.codex { background: rgba(167, 139, 250, 0.2); color: var(--codex); }
-        .agent-icon.claude-code { background: rgba(96, 165, 250, 0.2); color: var(--claude); }
+        .agent-icon.codex {
+            background: rgba(167, 139, 250, 0.2);
+            color: var(--codex);
+        }
 
-        .agent-info { flex: 1; }
-        .agent-name { font-weight: 600; font-size: 14px; }
-        .agent-status { font-size: 12px; color: var(--text-dim); }
+
+        .agent-info {
+            flex: 1;
+        }
+
+        .agent-name {
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .agent-status {
+            font-size: 12px;
+            color: var(--text-dim);
+        }
 
         .agent-count {
             font-size: 20px;
@@ -241,8 +318,16 @@
             color: var(--text-dim);
         }
 
-        .empty-state .emoji { font-size: 48px; margin-bottom: 16px; }
-        .empty-state p { font-size: 14px; max-width: 300px; margin: 0 auto; }
+        .empty-state .emoji {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+
+        .empty-state p {
+            font-size: 14px;
+            max-width: 300px;
+            margin: 0 auto;
+        }
 
         /* ── Session Selector ──────────── */
         .session-select {
@@ -256,13 +341,26 @@
         }
 
         /* ── Scrollbar ─────────────────── */
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-dim);
+        }
     </style>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
+
 <body>
     <div class="header">
         <h1>⚡ Agent Communication Hub</h1>
@@ -320,14 +418,7 @@
                         </div>
                         <div class="agent-count" id="codexFindings">—</div>
                     </div>
-                    <div class="agent-card">
-                        <div class="agent-icon claude-code">Cl</div>
-                        <div class="agent-info">
-                            <div class="agent-name">Claude Code</div>
-                            <div class="agent-status" id="claudeStatus">Idle</div>
-                        </div>
-                        <div class="agent-count" id="claudeFindings">—</div>
-                    </div>
+
                 </div>
             </div>
 
@@ -343,6 +434,7 @@
         </div>
     </div>
 
+    <script src="/session-autoselect.js"></script>
     <script>
         // ── State ────────────────────────
         let ws = null;
@@ -360,9 +452,16 @@
         const $findingCount = document.getElementById('findingCount');
         const $sessionInfo = document.getElementById('sessionInfo');
         const $codexStatus = document.getElementById('codexStatus');
-        const $claudeStatus = document.getElementById('claudeStatus');
         const $codexFindings = document.getElementById('codexFindings');
-        const $claudeFindings = document.getElementById('claudeFindings');
+
+        function getSessionDisplayState(session) {
+            return session?.displayState || (session?.watchdog?.stalled ? 'stalled' : session?.state) || 'unknown';
+        }
+
+        function escapeHtml(str) {
+            if (str == null) return '';
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
 
         // ── WebSocket ────────────────────
         function connectWs() {
@@ -415,28 +514,28 @@
             const div = document.createElement('div');
             div.className = 'timeline-event';
 
-            const agentClass = event.agent_id === 'codex' ? 'codex' : 'claude-code';
+            const agentClass = event.agent_id;
             const time = new Date(event.timestamp).toLocaleTimeString();
             let content = '';
 
             if (event.event_type === 'status') {
-                content = event.payload.state || JSON.stringify(event.payload);
+                content = escapeHtml(event.payload.state || JSON.stringify(event.payload));
             } else if (event.event_type === 'finding') {
-                content = `<strong>Finding:</strong> ${event.payload?.raw?.summary || 'New finding'}`;
+                content = `<strong>Finding:</strong> ${escapeHtml(event.payload?.raw?.summary || 'New finding')}`;
             } else if (event.event_type === 'error') {
-                content = `<span style="color: var(--critical);">Error: ${event.payload?.message || 'Unknown'}</span>`;
+                content = `<span style="color: var(--critical);">Error: ${escapeHtml(event.payload?.message || 'Unknown')}</span>`;
             } else if (event.event_type === 'raw_output') {
                 const preview = (event.payload?.data || '').slice(0, 100);
-                content = `<span style="opacity: 0.6">${preview}</span>`;
+                content = `<span style="opacity: 0.6">${escapeHtml(preview)}</span>`;
             } else {
-                content = event.event_type;
+                content = escapeHtml(event.event_type);
             }
 
             div.innerHTML = `
-                <span class="event-seq">#${event.seq ?? '?'}</span>
-                <span class="event-agent ${agentClass}">${event.agent_id}</span>
+                <span class="event-seq">#${escapeHtml(event.seq ?? '?')}</span>
+                <span class="event-agent ${escapeHtml(agentClass)}">${escapeHtml(event.agent_id)}</span>
                 <span class="event-content">
-                    <span class="event-type">${event.event_type}</span><br>
+                    <span class="event-type">${escapeHtml(event.event_type)}</span><br>
                     ${content}
                 </span>
                 <span class="event-time">${time}</span>
@@ -453,10 +552,10 @@
         function updateAgentStatus(event) {
             if (event.event_type !== 'status') return;
             const state = event.payload?.state;
-            const isCodex = event.agent_id === 'codex';
+            if (!['codex', 'mcp-codex'].includes(event.agent_id)) return;
 
-            const $status = isCodex ? $codexStatus : $claudeStatus;
-            const $count = isCodex ? $codexFindings : $claudeFindings;
+            const $status = $codexStatus;
+            const $count = $codexFindings;
 
             if (state === 'started') $status.textContent = '🟢 Running...';
             if (state === 'done') {
@@ -471,12 +570,31 @@
             try {
                 const res = await fetch('/api/sessions');
                 const data = await res.json();
+                const sessions = data.sessions || [];
                 $sessionSelect.innerHTML = '<option value="">— Select Session —</option>';
-                for (const s of data.sessions || []) {
+                for (const s of sessions) {
                     const opt = document.createElement('option');
                     opt.value = s.id;
-                    opt.textContent = `${s.id.slice(0, 8)}... (${s.state})`;
+                    const displayState = getSessionDisplayState(s);
+                    opt.textContent = s.label
+                        ? `${escapeHtml(s.label)} (${escapeHtml(displayState)})`
+                        : `${escapeHtml(s.id.slice(0, 8))}... (${escapeHtml(displayState)})`;
                     $sessionSelect.appendChild(opt);
+                }
+
+                if (!currentSessionId && sessions.length > 0 && window.pickBestSession) {
+                    const best = window.pickBestSession(sessions);
+                    if (best?.id) {
+                        $sessionSelect.value = best.id;
+                        $sessionSelect.dispatchEvent(new Event('change'));
+                    }
+                }
+
+                if (currentSessionId) {
+                    const current = sessions.find((session) => session.id === currentSessionId);
+                    if (current?.watchdog?.stalled) {
+                        $codexStatus.textContent = '⏳ Stalled';
+                    }
                 }
             } catch { /* offline */ }
         }
@@ -512,17 +630,27 @@
                 if (sessionData.session) {
                     renderSessionInfo(sessionData.session);
                     renderFindings(sessionData.session);
+                    if (sessionData.watchdog?.stalled) {
+                        $codexStatus.textContent = '⏳ Stalled';
+                    }
                 }
             } catch { /* offline */ }
         });
 
         function renderSessionInfo(session) {
+            const displayState = getSessionDisplayState(session);
+            const stalledNote = session.watchdog?.stalled
+                ? `<div style="margin-bottom: 8px; color: var(--high);"><strong>Watchdog:</strong> stalled after ${Math.round(session.watchdog.idleMs / 1000)}s idle</div>`
+                : '';
             $sessionInfo.innerHTML = `
-                <div style="margin-bottom: 8px"><strong>ID:</strong> ${session.id.slice(0, 12)}...</div>
-                <div style="margin-bottom: 8px"><strong>State:</strong> ${session.state}</div>
-                <div style="margin-bottom: 8px"><strong>Project:</strong> ${session.projectDir}</div>
+                ${session.label ? `<div style="margin-bottom: 8px"><strong>Label:</strong> ${escapeHtml(session.label)}</div>` : ''}
+                <div style="margin-bottom: 8px"><strong>ID:</strong> ${escapeHtml(session.id.slice(0, 12))}...</div>
+                <div style="margin-bottom: 8px"><strong>State:</strong> ${escapeHtml(displayState)}</div>
+                ${stalledNote}
+                <div style="margin-bottom: 8px"><strong>Project:</strong> ${escapeHtml(session.projectDir)}</div>
+                <div style="margin-bottom: 8px"><strong>Round:</strong> ${session.round ?? 1}</div>
                 <div style="margin-bottom: 8px"><strong>Created:</strong> ${new Date(session.createdAt).toLocaleString()}</div>
-                ${session.parentSessionId ? `<div><strong>Retry of:</strong> ${session.parentSessionId.slice(0, 8)}...</div>` : ''}
+                ${session.parentSessionId ? `<div><strong>Retry of:</strong> ${escapeHtml(session.parentSessionId.slice(0, 8))}...</div>` : ''}
             `;
         }
 
@@ -542,14 +670,14 @@
             for (const group of findings) {
                 const f = group.finding;
                 const agentBadges = group.agents.map(a =>
-                    `<span class="agent-badge ${a}">${a === 'codex' ? 'Cx' : 'Cl'}</span>`
+                    `<span class="agent-badge ${escapeHtml(a)}">${escapeHtml(a)}</span>`
                 ).join('');
 
                 html += `<tr>
-                    <td><span class="severity-dot ${f.severity}"></span>${f.severity}</td>
-                    <td>${f.summary}</td>
-                    <td style="font-family: monospace; font-size: 12px;">${f.file}</td>
-                    <td>${f.line ?? '—'}</td>
+                    <td><span class="severity-dot ${escapeHtml(f.severity)}"></span>${escapeHtml(f.severity)}</td>
+                    <td>${escapeHtml(f.summary)}</td>
+                    <td style="font-family: monospace; font-size: 12px;">${escapeHtml(f.file)}</td>
+                    <td>${escapeHtml(f.line ?? '—')}</td>
                     <td><div class="agent-badges">${agentBadges}</div></td>
                 </tr>`;
             }
@@ -566,4 +694,5 @@
         setInterval(loadSessions, 10000);
     </script>
 </body>
+
 </html>
