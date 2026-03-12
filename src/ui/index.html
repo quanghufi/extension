@@ -340,6 +340,86 @@
             cursor: pointer;
         }
 
+        /* ── Collaboration UI ──────────── */
+        .collab-badge {
+            display: inline-block;
+            font-size: 11px;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+        }
+        .collab-badge.awaiting { background: rgba(234,179,8,0.15); color: var(--medium); }
+        .collab-badge.reviewing { background: rgba(99,102,241,0.15); color: var(--accent); }
+        .collab-badge.resolution { background: rgba(249,115,22,0.15); color: var(--high); }
+        .collab-badge.resolved { background: rgba(34,197,94,0.15); color: var(--low); }
+        .collab-badge.terminal { background: rgba(139,143,163,0.15); color: var(--text-dim); }
+
+        .collab-panel {
+            padding: 12px 16px;
+            font-size: 13px;
+        }
+        .collab-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .collab-row:last-child { border-bottom: none; }
+        .collab-label {
+            color: var(--text-dim);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+        }
+        .collab-value {
+            font-weight: 500;
+            font-size: 13px;
+        }
+        .collab-value.unassigned {
+            color: var(--text-dim);
+            font-style: italic;
+        }
+
+        /* ── Timeline Messages ─────────── */
+        .timeline-message {
+            padding: 12px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
+            animation: fadeIn 0.3s ease-out;
+            transition: background 0.15s;
+            background: rgba(99,102,241,0.03);
+            border-left: 3px solid var(--accent);
+        }
+        .timeline-message:hover { background: rgba(99,102,241,0.06); }
+
+        .msg-role {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .msg-role.reviewer { background: rgba(167,139,250,0.2); color: var(--codex); }
+        .msg-role.responder { background: rgba(99,102,241,0.2); color: var(--accent); }
+        .msg-role.decider { background: rgba(249,115,22,0.2); color: var(--high); }
+        .msg-role.system { background: rgba(139,143,163,0.2); color: var(--text-dim); }
+
+        .timeline-collab-marker {
+            padding: 6px 20px;
+            border-bottom: 1px solid var(--border);
+            font-size: 11px;
+            color: var(--medium);
+            font-weight: 600;
+            text-align: center;
+            background: rgba(234,179,8,0.05);
+            letter-spacing: 0.5px;
+        }
+
         /* ── Scrollbar ─────────────────── */
         ::-webkit-scrollbar {
             width: 6px;
@@ -389,11 +469,11 @@
                 </div>
             </div>
 
-            <!-- Timeline Card -->
+            <!-- Merged Timeline Card -->
             <div class="card">
                 <div class="card-header">
-                    <span>📡 Live Timeline</span>
-                    <span id="eventCount" style="font-size: 12px;">0 events</span>
+                    <span>📡 Timeline (Events + Messages)</span>
+                    <span id="eventCount" style="font-size: 12px;">0 items</span>
                 </div>
                 <div id="timeline" class="timeline">
                     <div class="empty-state">
@@ -406,8 +486,26 @@
 
         <!-- Sidebar -->
         <div>
-            <!-- Agent Status Card -->
+            <!-- Session Info Card -->
             <div class="card" style="margin-bottom: 24px;">
+                <div class="card-header">📝 Session Info</div>
+                <div class="card-body">
+                    <div id="sessionInfo" style="font-size: 13px; color: var(--text-dim);">
+                        No session selected
+                    </div>
+                </div>
+            </div>
+
+            <!-- Collaboration State Card -->
+            <div class="card" style="margin-bottom: 24px;">
+                <div class="card-header">🤝 Collaboration</div>
+                <div id="collabPanel" class="collab-panel">
+                    <div style="color: var(--text-dim); font-size: 13px;">No session selected</div>
+                </div>
+            </div>
+
+            <!-- Agent Status Card -->
+            <div class="card">
                 <div class="card-header">🤖 Agents</div>
                 <div id="agentStatus">
                     <div class="agent-card">
@@ -417,17 +515,6 @@
                             <div class="agent-status" id="codexStatus">Idle</div>
                         </div>
                         <div class="agent-count" id="codexFindings">—</div>
-                    </div>
-
-                </div>
-            </div>
-
-            <!-- Session Info Card -->
-            <div class="card">
-                <div class="card-header">📝 Session Info</div>
-                <div class="card-body">
-                    <div id="sessionInfo" style="font-size: 13px; color: var(--text-dim);">
-                        No session selected
                     </div>
                 </div>
             </div>
@@ -439,7 +526,7 @@
         // ── State ────────────────────────
         let ws = null;
         let currentSessionId = null;
-        let events = [];
+        let timelineItems = [];
         let reconnectTimer = null;
         let reconnectDelay = 1000;
 
@@ -451,6 +538,7 @@
         const $findingsContainer = document.getElementById('findingsContainer');
         const $findingCount = document.getElementById('findingCount');
         const $sessionInfo = document.getElementById('sessionInfo');
+        const $collabPanel = document.getElementById('collabPanel');
         const $codexStatus = document.getElementById('codexStatus');
         const $codexFindings = document.getElementById('codexFindings');
 
@@ -461,6 +549,78 @@
         function escapeHtml(str) {
             if (str == null) return '';
             return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        // ── Collab Helpers ────────────────
+        function collabBadgeClass(state) {
+            if (!state) return 'terminal';
+            if (state.includes('awaiting')) return 'awaiting';
+            if (state.includes('reviewing')) return 'reviewing';
+            if (state === 'awaiting_resolution') return 'resolution';
+            if (state === 'resolved') return 'resolved';
+            return 'terminal';
+        }
+
+        function formatCollabState(state) {
+            if (!state) return 'unknown';
+            return state.replace(/_/g, ' ');
+        }
+
+        function renderCollabPanel(session) {
+            if (!session) {
+                $collabPanel.innerHTML = '<div style="color: var(--text-dim); font-size: 13px;">No session selected</div>';
+                return;
+            }
+
+            const cs = session.collabState || 'draft';
+            const a = session.assignments || {};
+            const t = session.turn || {};
+
+            const turnOwner = t.ownerId || '—';
+            const turnStatus = t.status || 'idle';
+            const turnClaimed = t.claimedAt ? new Date(t.claimedAt).toLocaleTimeString() : '—';
+            const turnExpires = t.claimExpiresAt ? new Date(t.claimExpiresAt).toLocaleTimeString() : '—';
+
+            $collabPanel.innerHTML = `
+                <div class="collab-row">
+                    <span class="collab-label">State</span>
+                    <span class="collab-badge ${collabBadgeClass(cs)}">${formatCollabState(cs)}</span>
+                </div>
+                <div class="collab-row">
+                    <span class="collab-label">Reviewer</span>
+                    <span class="collab-value ${a.reviewer ? '' : 'unassigned'}">${escapeHtml(a.reviewer || 'unassigned')}</span>
+                </div>
+                <div class="collab-row">
+                    <span class="collab-label">Responder</span>
+                    <span class="collab-value ${a.responder ? '' : 'unassigned'}">${escapeHtml(a.responder || 'unassigned')}</span>
+                </div>
+                <div class="collab-row">
+                    <span class="collab-label">Decider</span>
+                    <span class="collab-value ${a.decider ? '' : 'unassigned'}">${escapeHtml(a.decider || 'unassigned')}</span>
+                </div>
+                <div class="collab-row">
+                    <span class="collab-label">Turn Owner</span>
+                    <span class="collab-value">${escapeHtml(turnOwner)}</span>
+                </div>
+                <div class="collab-row">
+                    <span class="collab-label">Turn Status</span>
+                    <span class="collab-value">${escapeHtml(turnStatus)}</span>
+                </div>
+                ${turnStatus === 'claimed' ? `
+                <div class="collab-row">
+                    <span class="collab-label">Claimed</span>
+                    <span class="collab-value">${turnClaimed}</span>
+                </div>
+                <div class="collab-row">
+                    <span class="collab-label">Expires</span>
+                    <span class="collab-value">${turnExpires}</span>
+                </div>
+                ` : ''}
+                <div class="collab-row">
+                    <span class="collab-label">Messages</span>
+                    <span class="collab-value">${(session.messages || []).length}</span>
+                </div>
+            `;
         }
 
         // ── WebSocket ────────────────────
@@ -487,7 +647,6 @@
             ws.onclose = () => {
                 $wsStatus.className = 'status-badge disconnected';
                 $wsStatus.textContent = 'Disconnected';
-                // Exponential backoff reconnect
                 reconnectTimer = setTimeout(() => {
                     reconnectDelay = Math.min(reconnectDelay * 2, 30000);
                     connectWs();
@@ -499,16 +658,31 @@
 
         // ── Event Handling ────────────────
         function handleEvent(event) {
-            events.push(event);
+            timelineItems.push({ kind: 'event', data: event, ts: event.timestamp });
             renderTimelineEvent(event);
             updateAgentStatus(event);
-            $eventCount.textContent = `${events.length} events`;
+            updateTimelineCount();
+        }
+
+        function updateTimelineCount() {
+            $eventCount.textContent = `${timelineItems.length} items`;
         }
 
         function renderTimelineEvent(event) {
-            // Remove empty state
-            if (events.length === 1) {
+            // Remove empty state on first item
+            if (timelineItems.length === 1) {
                 $timeline.innerHTML = '';
+            }
+
+            // Collab state transition marker
+            if (event.event_type === 'collab_state_changed' || event.event_type === 'collab_advance') {
+                const marker = document.createElement('div');
+                marker.className = 'timeline-collab-marker';
+                const fromState = event.payload?.previousState || event.payload?.from || '?';
+                const toState = event.payload?.nextState || event.payload?.to || '?';
+                marker.textContent = `⚡ ${fromState} → ${toState}`;
+                $timeline.prepend(marker);
+                return;
             }
 
             const div = document.createElement('div');
@@ -543,10 +717,32 @@
 
             $timeline.prepend(div);
 
-            // Keep timeline reasonable size
-            while ($timeline.children.length > 200) {
+            while ($timeline.children.length > 300) {
                 $timeline.removeChild($timeline.lastChild);
             }
+        }
+
+        function renderTimelineMessage(msg) {
+            const div = document.createElement('div');
+            div.className = 'timeline-message';
+
+            const time = new Date(msg.createdAt).toLocaleTimeString();
+            const contentPreview = (msg.content || '').slice(0, 200);
+            const refsNote = (msg.findingRefs && msg.findingRefs.length > 0)
+                ? `<span style="font-size:11px; color: var(--text-dim);"> (${msg.findingRefs.length} finding ref${msg.findingRefs.length > 1 ? 's' : ''})</span>`
+                : '';
+
+            div.innerHTML = `
+                <span class="event-seq">💬</span>
+                <span class="msg-role ${escapeHtml(msg.role)}">${escapeHtml(msg.role)}</span>
+                <span class="event-content">
+                    <span class="event-type">${escapeHtml(msg.type)}${refsNote}</span><br>
+                    ${escapeHtml(contentPreview)}${msg.content.length > 200 ? '…' : ''}
+                </span>
+                <span class="event-time">${time}</span>
+            `;
+
+            $timeline.prepend(div);
         }
 
         function updateAgentStatus(event) {
@@ -576,9 +772,10 @@
                     const opt = document.createElement('option');
                     opt.value = s.id;
                     const displayState = getSessionDisplayState(s);
+                    const collabLabel = s.collabState ? ` [${s.collabState}]` : '';
                     opt.textContent = s.label
-                        ? `${escapeHtml(s.label)} (${escapeHtml(displayState)})`
-                        : `${escapeHtml(s.id.slice(0, 8))}... (${escapeHtml(displayState)})`;
+                        ? `${s.label} (${displayState}${collabLabel})`
+                        : `${s.id.slice(0, 8)}... (${displayState}${collabLabel})`;
                     $sessionSelect.appendChild(opt);
                 }
 
@@ -601,8 +798,9 @@
 
         $sessionSelect.addEventListener('change', async (e) => {
             currentSessionId = e.target.value;
-            events = [];
+            timelineItems = [];
             $timeline.innerHTML = '<div class="empty-state"><div class="emoji">⏳</div><p>Waiting for events...</p></div>';
+            renderCollabPanel(null);
 
             if (!currentSessionId) return;
 
@@ -611,24 +809,40 @@
                 ws.send(JSON.stringify({ subscribe: currentSessionId }));
             }
 
-            // Load existing events
             try {
-                const res = await fetch(`/api/sessions/${currentSessionId}/events`);
-                const data = await res.json();
-                if (data.events?.length > 0) {
-                    $timeline.innerHTML = '';
-                    for (const event of data.events) {
-                        events.push(event);
-                        renderTimelineEvent(event);
-                    }
-                    $eventCount.textContent = `${events.length} events`;
-                }
+                // Load events, session, and messages in parallel
+                const [eventsRes, sessionRes, messagesRes] = await Promise.all([
+                    fetch(`/api/sessions/${currentSessionId}/events`),
+                    fetch(`/api/sessions/${currentSessionId}`),
+                    fetch(`/api/sessions/${currentSessionId}/messages`),
+                ]);
 
-                // Load session info
-                const sessionRes = await fetch(`/api/sessions/${currentSessionId}`);
+                const eventsData = await eventsRes.json();
                 const sessionData = await sessionRes.json();
+                const messagesData = await messagesRes.json();
+
+                // Build merged timeline
+                const allEvents = (eventsData.events || []).map(ev => ({ kind: 'event', data: ev, ts: ev.timestamp }));
+                const allMessages = (messagesData.messages || []).map(m => ({ kind: 'message', data: m, ts: m.createdAt }));
+                timelineItems = [...allEvents, ...allMessages].sort((a, b) => new Date(a.ts) - new Date(b.ts));
+
+                // Render merged timeline
+                if (timelineItems.length > 0) {
+                    $timeline.innerHTML = '';
+                    for (const item of timelineItems) {
+                        if (item.kind === 'event') {
+                            renderTimelineEvent(item.data);
+                        } else {
+                            renderTimelineMessage(item.data);
+                        }
+                    }
+                }
+                updateTimelineCount();
+
+                // Render session info + collab panel
                 if (sessionData.session) {
                     renderSessionInfo(sessionData.session);
+                    renderCollabPanel(sessionData.session);
                     renderFindings(sessionData.session);
                     if (sessionData.watchdog?.stalled) {
                         $codexStatus.textContent = '⏳ Stalled';

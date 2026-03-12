@@ -1,0 +1,78 @@
+{
+  "status": "has_findings",
+  "summary": "Phan collab moi van con mot so lo hong ve redaction, authorization va state initialization; cac loi nay du de gay ro ri token, spoof agent action, va lam workflow ket o trang thai sai.",
+  "findings": [
+    {
+      "severity": "high",
+      "title": "Status endpoints still leak turn secrets through serialized session payloads",
+      "why_it_matters": "`session.toJSON()` includes both `turn.token` and every historical `message.turnToken`. `GET /api/sessions/:id` and `hub_get_status` return that object directly, so any client that can read session status can steal the active turn token or replay old ones.",
+      "file": "src/api-routes.js",
+      "line": 78,
+      "fix_instructions": "Introduce a single session-response sanitizer that deep-redacts `turn.token` and `messages[*].turnToken` before any API/MCP response. Use it in `apiGetSession`, `apiCreateSession`, and `hub_get_status` instead of returning `session.toJSON()` directly.",
+      "confidence": "high"
+    },
+    {
+      "severity": "high",
+      "title": "Advance-session actions can be spoofed because no turn token is required",
+      "why_it_matters": "`request_response`, `request_rerun`, `release_turn`, and even `review_complete` are authorized only by a caller-supplied `agentId`. Any client that knows the session ID can impersonate `codex` or `antigravity` and move the collaboration state machine without owning the turn.",
+      "file": "src/hub/session-collab.js",
+      "line": 195,
+      "fix_instructions": "Thread a `turnToken` through both REST and MCP advance-session handlers, and in `Session.advanceCollabState()` require `ensureTurnOwner()` for all actions that are supposed to come from the active reviewer/responder turn. Keep `resolve`/`close` as explicit decider-only exceptions if intended.",
+      "confidence": "high"
+    },
+    {
+      "severity": "high",
+      "title": "Message posting trusts caller-provided roles, allowing decider/system spoofing",
+      "why_it_matters": "`addMessage()` validates only that `role` is one of the allowed enum values. A client can post as `agentId: \"codex\"` with `role: \"decider\"` or `role: \"system\"`, which can mislead reviewers and any automation that consumes message roles.",
+      "file": "src/hub/session.js",
+      "line": 380,
+      "fix_instructions": "Derive the allowed role from `session.assignments` server-side and reject mismatches. Reserve `system` messages for internal code paths only, not external REST/MCP input.",
+      "confidence": "high"
+    },
+    {
+      "severity": "medium",
+      "title": "Fresh sessions are never moved out of `draft`, so default collaboration cannot start",
+      "why_it_matters": "The constructor sets default assignments, but `collabState` stays `draft` and `initCollab()` is never called anywhere in the workspace. A brand-new session therefore cannot be claimed immediately even though reviewer/responder are already assigned by default.",
+      "file": "src/hub/session.js",
+      "line": 77,
+      "fix_instructions": "Initialize `collabState` from `transitionOnAssignments(this.assignments)` in the constructor, or call `initCollab()` from every session creation path (`apiCreateSession`, MCP create-review flow, and any tests/helpers). Add a test that a new default session can be claimed by the reviewer without a prior assignment call.",
+      "confidence": "high"
+    },
+    {
+      "severity": "medium",
+      "title": "Expired turns are only detected on mutating calls, so status can report stale ownership indefinitely",
+      "why_it_matters": "`expireTurnIfNeeded()` runs inside `claimTurn`, `ensureTurnOwner`, and `advanceCollabState`, but not when serving status/message-list endpoints. If nobody submits another action, clients can keep seeing a claimed turn long after expiry, and no `turn_expired` event is ever emitted.",
+      "file": "src/hub/session.js",
+      "line": 356,
+      "fix_instructions": "Refresh turn expiry before serializing session state in read endpoints, and emit/persist a `turn_expired` event the first time an expired claim is observed so subscribers see the transition.",
+      "confidence": "medium"
+    },
+    {
+      "severity": "medium",
+      "title": "Finding-targeted message types do not actually require a finding reference",
+      "why_it_matters": "`finding_reply`, `decision`, `rerun_request`, and `resolution` are documented as requiring finding refs, but the code only validates refs when the caller happens to provide them. That allows orphaned replies/decisions with no finding target, which breaks per-finding discussion and automation.",
+      "file": "src/hub/session.js",
+      "line": 386,
+      "fix_instructions": "In `Session.addMessage()`, reject `MESSAGE_TYPES_REQUIRING_FINDING_REF` when `findingRefs` is missing or empty, then validate the refs. Add tests for each required type failing without a ref.",
+      "confidence": "high"
+    },
+    {
+      "severity": "medium",
+      "title": "Critical collab invariants are not covered by tests",
+      "why_it_matters": "The new tests exercise pure helpers and MCP tool listing, but there is no coverage for the bugs above: status redaction, fresh-session initialization, advance-action authorization, role spoofing, or required finding refs. These regressions are therefore likely to reappear.",
+      "file": "src/mcp-server.test.js",
+      "line": 36,
+      "fix_instructions": "Add integration-style tests around session/route behavior that assert: status responses redact tokens, new sessions start in a claimable collab state, advance actions fail without the owner token, external callers cannot spoof `system`/`decider` roles, and finding-targeted messages require refs.",
+      "confidence": "high"
+    }
+  ],
+  "fix_plan": [
+    "Add a shared sanitizer for session payloads and use it for every REST/MCP status response.",
+    "Make turn ownership explicit in collaboration mutations by requiring a valid `turnToken` for reviewer/responder state advances.",
+    "Bind message roles to assignments server-side and block externally supplied `system` messages.",
+    "Initialize collaboration state on session creation instead of leaving new sessions in `draft`.",
+    "Enforce non-empty `findingRefs` for finding-targeted message types and add regression tests.",
+    "Expire turns during read paths and emit a persisted `turn_expired` lifecycle event when appropriate."
+  ],
+  "rerun_review": true
+}

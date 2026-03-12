@@ -1,17 +1,20 @@
 {
-  "updated_at": "2026-03-11T21:50:00+07:00",
+  "updated_at": "2026-03-12T07:11:00+07:00",
   "working_on": {
-    "feature": "Codex Review Loop — Phase 4 + 5",
-    "task": "Completed 5-round review loop for Phase 5 (server.js). All 8 bugs fixed, 8 rebuttals won.",
+    "feature": "Packaging v1.0.0 — Global npm install",
+    "task": "Packaged extension-hub as global npm package. CLI entry, package.json, .npmignore, README, USER-GUIDE.md. Pushed to GitHub.",
     "status": "done",
     "files": [
-      "src/server.js",
-      "src/api-routes.js",
-      "src/ui/index.html",
-      ".agents/workflows/codex-review-loop.md"
+      "bin/extension-hub.js",
+      "package.json",
+      ".npmignore",
+      "README.md",
+      "docs/USER-GUIDE.md",
+      ".agents/workflows/antigravity-hub-contract.md",
+      ".gitignore"
     ],
     "blockers": [],
-    "notes": "13/13 server tests pass. All Codex rejected findings withdrawn (100% rebuttal win rate). Workflow updated with cleanup step."
+    "notes": "Install anywhere: npm install -g github:quanghufi/extension"
   },
   "pending_tasks": [
     {

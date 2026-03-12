@@ -1,0 +1,10 @@
+{
+  "status": "has_findings",
+  "summary": "Codex review failed with a non-zero exit code. stderr: Failed to read prompt from stdin: input is not valid UTF-8 (invalid byte at offset 1040). Convert it to UTF-8 and retry (e.g., `iconv -f <ENC> -t UTF-8 prompt.txt`).",
+  "findings": [],
+  "fix_plan": [
+    "Inspect the Codex execution output and schema compliance for this review attempt.",
+    "Fix the review command or prompt issue, then rerun the review."
+  ],
+  "rerun_review": true
+}

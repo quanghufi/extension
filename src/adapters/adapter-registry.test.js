@@ -152,6 +152,7 @@ describe('resetRegistry', () => {
 
         assert.ok(!hasAdapter('custom'));
         assert.ok(hasAdapter('codex'));
+        assert.ok(hasAdapter('mcp-codex'));
     });
 });
 

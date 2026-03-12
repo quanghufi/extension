@@ -4,7 +4,7 @@
 
 Multi-agent communication hub that enables AI agents (Antigravity, Codex CLI) to collaborate on code review through a structured event-driven architecture.
 
-**Status:** Phase 0 Spike — INCOMPLETE (needs rerun with corrected tests)
+**Status:** Active development — event-driven hub with ongoing agent-to-agent collaboration work.
 
 ## Tech Stack
 
@@ -57,22 +57,18 @@ Ready for Phase 1 — Event-Driven Hub.
 
 ## Conventions
 
-- Vietnamese comments/docs are normal (bilingual project)
+- English or Vietnamese are both acceptable in code, docs, and plans
+- Prefer Vietnamese when summarizing progress or results back to the user
 - Commit messages follow conventional commits
 - All agent feedback goes in `.feedback/`
 - Agent run logs go in `.agents/runs/`
 
-### 🔪 File Splitting Rules (Auto-Enforced)
+### File Organization
 
-> **Workflow chi tiết:** `.agents/workflows/file-splitting.md`
-
-| Metric | ⚠️ Warning | 🔴 Must Split |
-|--------|-----------|---------------|
-| Source lines | > 200 | > 300 |
-| Test lines | > 250 | > 400 |
-| File size | > 10 KB | > 15 KB |
-
-**Bắt buộc:** Agent PHẢI kiểm tra file target trước khi thêm code. Nếu file đã ở mức ⚠️ → tách trước, code sau. KHÔNG BAO GIỜ tạo file mới > 300 lines.
+- Keep modules reasonably organized and easy to review
+- Split files when it clearly improves maintainability, ownership, or readability
+- File length is a guideline, not a hard rule
+- Prefer coherent domain boundaries over mechanical file splitting
 
 ## Important: Do NOT
 

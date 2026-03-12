@@ -141,6 +141,7 @@ export function unregisterAdapter(agentId) {
 export function resetRegistry() {
     registry.clear();
     registerBuiltin(new CodexAdapter());
+    registerBuiltin(new McpCodexAdapter());
 }
 
 // ── Preset Configurations ────────────────────────────

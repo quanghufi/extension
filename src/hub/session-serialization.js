@@ -1,6 +1,7 @@
 // @ts-check
 
 import { AgentRegistry } from './agent-registry.js';
+import { defaultAssignments, createDefaultTurn } from './session-collab.js';
 
 /**
  * @param {import('./session.js').Session} session
@@ -31,6 +32,13 @@ export function serializeSession(session) {
         rebuttalOutcomes: session.rebuttalOutcomes,
         retryMode: session.retryMode,
         _seqCounter: session._seqCounter,
+        // Collaboration layer
+        messages: session.messages,
+        messageSeqCounter: session.messageSeqCounter,
+        collabState: session.collabState,
+        assignments: session.assignments,
+        turn: session.turn,
+        pendingAction: session.pendingAction,
     };
 }
 
@@ -70,4 +78,18 @@ export function hydrateSession(session, data) {
     if (Array.isArray(data.rebuttalOutcomes)) {
         session.rebuttalOutcomes = data.rebuttalOutcomes;
     }
+
+    // Collaboration layer — safe defaults for old sessions
+    session.messages = /** @type {import('./session-messages.js').SessionMessage[]} */ (data.messages ?? []);
+    session.messageSeqCounter = /** @type {number} */ (data.messageSeqCounter ?? 0);
+    session.collabState = /** @type {string} */ (data.collabState ?? 'draft');
+    session.assignments = /** @type {{ reviewer: string, responder: string, decider: string }} */ (
+        data.assignments ?? defaultAssignments()
+    );
+    session.turn = /** @type {ReturnType<typeof createDefaultTurn>} */ (
+        data.turn ?? createDefaultTurn()
+    );
+    session.pendingAction = /** @type {{ type: string, [key: string]: unknown }|null} */ (
+        data.pendingAction ?? null
+    );
 }

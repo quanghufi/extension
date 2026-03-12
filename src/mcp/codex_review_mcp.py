@@ -35,37 +35,28 @@ HISTORY_FILE_RE = re.compile(r"^codex-review\.(\d{8}T\d{6}(?:\d{6})?Z)(?:\.[^.]+
 
 
 def read_framed_message(stdin: BinaryIO) -> dict[str, Any] | None:
-    headers: dict[str, str] = {}
+    """Read a single JSON-RPC message using NDJSON framing (one JSON object per line).
 
-    while True:
-        line = stdin.readline()
-        if not line:
-            return None
-        if line in (b"\r\n", b"\n"):
-            break
+    MCP SDK v1.27.1+ uses newline-delimited JSON instead of Content-Length framing.
+    """
+    line = stdin.readline()
+    if not line:
+        return None
 
-        decoded = line.decode("ascii", errors="ignore").strip()
-        if ":" not in decoded:
-            continue
-        key, value = decoded.split(":", 1)
-        headers[key.strip().lower()] = value.strip()
+    decoded = line.decode("utf-8").strip()
+    if not decoded:
+        return None
 
-    raw_length = headers.get("content-length")
-    if raw_length is None:
-        raise ValueError("Missing Content-Length header")
-
-    content_length = int(raw_length)
-    body = stdin.read(content_length)
-    if len(body) < content_length:
-        raise ValueError("Incomplete message body")
-
-    return json.loads(body.decode("utf-8"))
+    return json.loads(decoded)
 
 
 def write_framed_message(stdout: BinaryIO, payload: dict[str, Any]) -> None:
-    data = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    stdout.write(f"Content-Length: {len(data)}\r\n\r\n".encode("ascii"))
-    stdout.write(data)
+    """Write a single JSON-RPC message using NDJSON framing (one JSON object per line).
+
+    MCP SDK v1.27.1+ uses newline-delimited JSON instead of Content-Length framing.
+    """
+    data = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    stdout.write((data + "\n").encode("utf-8"))
     stdout.flush()
 
 

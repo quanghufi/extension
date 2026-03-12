@@ -18,7 +18,17 @@ import { v4 as uuidv4 } from 'uuid';
 const SEVERITY_LEVELS = /** @type {const} */ (['critical', 'high', 'medium', 'low']);
 
 /** @type {readonly string[]} */
-const EVENT_TYPES = /** @type {const} */ (['finding', 'status', 'error', 'heartbeat', 'raw_output']);
+const COLLAB_EVENT_TYPES = /** @type {const} */ ([
+    'message_posted', 'turn_claimed', 'turn_released', 'turn_expired',
+    'agent_assigned', 'collab_state_changed',
+    'resolution_requested', 'session_resolved', 'session_closed',
+]);
+
+/** @type {readonly string[]} */
+const EVENT_TYPES = /** @type {const} */ ([
+    'finding', 'status', 'error', 'heartbeat', 'raw_output',
+    ...COLLAB_EVENT_TYPES,
+]);
 
 // ── Event Factory ────────────────────────────────────
 
@@ -184,4 +194,4 @@ export function computeDedupeKey({ file, line, summary }) {
  * @property {number} totalMs
  */
 
-export { SEVERITY_LEVELS, EVENT_TYPES };
+export { SEVERITY_LEVELS, EVENT_TYPES, COLLAB_EVENT_TYPES };

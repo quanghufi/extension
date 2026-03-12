@@ -1,0 +1,95 @@
+{
+  "status": "has_findings",
+  "summary": "The MCP path is not behaviorally equivalent to the existing HTTP flow yet. The biggest regressions are stalled reviews hanging until timeout, tool-level failures being reported as successful clean reviews, and evaluate/rerun semantics diverging from the REST implementation and the updated workflow docs.",
+  "findings": [
+    {
+      "severity": "critical",
+      "title": "`waitForCompletion` never stops on stalled sessions, so `waitForCompletion: true` masks reviewer stalls until the hard timeout",
+      "why_it_matters": "The updated contract says stalled reviews must stop immediately and surface `reviewer_stalled`. The current MCP implementation only waits for terminal `state` values, but stalled sessions remain `running`, so callers block for up to 10 minutes and lose the intended retry path.",
+      "file": "src/mcp-server.js",
+      "line": 95,
+      "fix_instructions": "Update `HubManager.waitForCompletion()` to check `session.getDisplayState()` or `session.getWatchdogStatus().stalled` on each poll. When stalled, throw a dedicated error or return a structured stalled result so `hub_create_review` and `hub_rerun_review` can surface `reviewer_stalled` immediately instead of waiting for timeout.",
+      "confidence": "high"
+    },
+    {
+      "severity": "high",
+      "title": "Adapter ignores MCP tool errors and can report execution failures as successful zero-finding reviews",
+      "why_it_matters": "`codex_review_mcp.py` returns tool results with `isError: true` on failures, but `McpCodexAdapter.execute()` never checks that flag. If the bridge fails, the adapter can parse an empty `review.findings` array, mark the run `ok`, and finalize the session as `completed`, which is a false clean review.",
+      "file": "src/adapters/mcp-adapter.js",
+      "line": 457,
+      "fix_instructions": "After `callTool()`, inspect the returned `isError` flag and validate that a structured review payload is present. If `isError` is true or the review payload is missing/invalid, emit an error event and set adapter status to `failed` instead of converting an empty result to success.",
+      "confidence": "high"
+    },
+    {
+      "severity": "high",
+      "title": "`hub_evaluate_findings` bypasses the existing rebuttal model and never persists evaluations",
+      "why_it_matters": "The REST path normalizes rebuttals, updates legacy evaluations, and saves the session. The MCP tool just pushes `{target, verdict, rationale}` records into `session.rebuttals` in memory. Those records use a different verdict vocabulary (`accepted/rejected/disputed` instead of `accept/reject/defer/...`), are not written to disk, and are incompatible with the appeal/rerun logic in `src/hub/rebuttal.js`.",
+      "file": "src/mcp-server.js",
+      "line": 297,
+      "fix_instructions": "Replace the custom `hub_evaluate_findings` logic with the same normalization/persistence flow used by `apiEvaluateFindings`: map MCP verdicts to the canonical rebuttal verdicts, call `normalizeRebuttalInput()`, update `session.evaluations`, assign `session.rebuttals = upsertRebuttal(...)`, and `server.store.save(session)` before returning.",
+      "confidence": "high"
+    },
+    {
+      "severity": "high",
+      "title": "`hub_rerun_review` skips the HTTP rerun safeguards and semantics",
+      "why_it_matters": "The REST rerun route enforces the 5-round cap, supports appeal vs reverify modes, builds the appeal prompt from rebuttals, and derives rebuttal outcomes after the child review completes. The MCP rerun tool does none of that, so MCP users can exceed 5 rounds and lose the feedback-chain behavior the workflow documents describe.",
+      "file": "src/mcp-server.js",
+      "line": 376,
+      "fix_instructions": "Make `hub_rerun_review` mirror `apiRerunSession`: reject reruns when `session.round >= 5`, accept mode/context/snapshot inputs, use `buildAppealPrompt()` for appeal mode, persist the child session, and after completion compute `deriveAppealOutcomes()` and save the updated child session.",
+      "confidence": "high"
+    },
+    {
+      "severity": "medium",
+      "title": "`src/mcp-server.js` imports `zod` directly but `package.json` does not declare it as a direct dependency",
+      "why_it_matters": "The new MCP server has a hard runtime import on `zod`, but the package only declares `@modelcontextprotocol/sdk`. The current lockfile happens to contain `zod`, but consumers installing from the published package are relying on a transitive/peer resolution detail instead of an explicit dependency.",
+      "file": "package.json",
+      "line": 45,
+      "fix_instructions": "Add `zod` to `dependencies` in `package.json` and refresh `package-lock.json`. Treat it as a first-class runtime dependency because `src/mcp-server.js` imports it directly.",
+      "confidence": "medium"
+    },
+    {
+      "severity": "medium",
+      "title": "`poll_hub.js` assumes `/api/sessions` returns an array and reads the wrong status fields",
+      "why_it_matters": "`apiListSessions()` returns `{ sessions: [...] }`, not a bare array. `poll_hub.js` therefore treats the whole response object as an array, so `latest` becomes `undefined`. Its status branch also reads `data.displayState` instead of `data.session.displayState`, so even manual debugging output is misleading.",
+      "file": "scripts/poll_hub.js",
+      "line": 22,
+      "fix_instructions": "Parse the list response as `const { sessions } = await httpGet('/api/sessions')`, then select from `sessions`. For session status, read `data.session.state`, `data.session.displayState`, and `data.watchdog` to match the actual REST payload.",
+      "confidence": "high"
+    },
+    {
+      "severity": "medium",
+      "title": "`review_and_poll.js` does not call the existing HTTP API correctly, so it never creates the intended file-targeted review",
+      "why_it_matters": "`POST /api/sessions` expects nested `reviewOptions`, but the script sends `reviewTarget`, `filePath`, and `maxFindings` at the top level. The server ignores those fields and starts a default uncommitted review instead. The polling code also reads `status.displayState` instead of `status.session.displayState`, so it does not reflect the actual API shape.",
+      "file": "scripts/review_and_poll.js",
+      "line": 31,
+      "fix_instructions": "Send `reviewOptions: { review_target: 'file', file_path: '...', max_findings: 15 }` in the create request, and read `status.session.displayState` from `/api/sessions/:id`. If this script is meant to exercise MCP instead of HTTP, switch it to the MCP client entirely and remove the stale HTTP assumptions.",
+      "confidence": "high"
+    },
+    {
+      "severity": "medium",
+      "title": "`hub_get_status` returns a different shape than the documented contract and HTTP fallback",
+      "why_it_matters": "The updated docs tell Antigravity to read `session.state` and `session.displayState`, but the MCP tool currently flattens the session object into the top level. A client following the new contract literally will look for `session.displayState` and get `undefined`, which breaks the state machine in both new workflow documents.",
+      "file": "src/mcp-server.js",
+      "line": 247,
+      "fix_instructions": "Return a payload shape that matches the documented contract and the HTTP API: `{ session: session.toJSON(), watchdog: session.getWatchdogStatus(), lineage?: ... }`. Update all MCP tools to keep field names aligned with the workflow examples.",
+      "confidence": "high"
+    },
+    {
+      "severity": "low",
+      "title": "The new tests do not exercise any MCP tool behavior, which leaves the regressions above undetected",
+      "why_it_matters": "`src/mcp-server.test.js` only checks that `buildMcpServer()` returns objects and that `HubManager` exposes methods. It does not cover stalled-session handling, payload shapes, evaluation persistence, rerun semantics, or adapter handling of MCP tool errors, so the current parity gaps can ship unnoticed.",
+      "file": "src/mcp-server.test.js",
+      "line": 34,
+      "fix_instructions": "Add behavioral tests that invoke `hub_create_review`, `hub_get_status`, `hub_evaluate_findings`, and `hub_rerun_review` against a temporary in-process hub. Also add adapter tests for `isError` tool responses and stalled-session completion paths.",
+      "confidence": "high"
+    }
+  ],
+  "fix_plan": [
+    "Make the MCP server tool contracts match the existing REST behavior and the updated workflow documents, starting with `hub_get_status`, `hub_evaluate_findings`, and `hub_rerun_review`.",
+    "Fix stalled-review handling end-to-end: stop `waitForCompletion()` on watchdog stalls and propagate that state through `hub_create_review`/`hub_rerun_review`.",
+    "Harden `McpCodexAdapter` so MCP tool failures cannot be reported as successful clean reviews.",
+    "Repair or remove the broken debug scripts that still assume the old HTTP payload shapes.",
+    "Add integration-style tests for MCP tool payloads, persistence, rerun semantics, and adapter error propagation, then rerun the review."
+  ],
+  "rerun_review": true
+}

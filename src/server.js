@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import { SessionStore } from './hub/session-store.js';
 import { SnapshotManager } from './snapshot/snapshot-manager.js';
 import { apiListSessions, apiCreateSession, apiGetSession, apiDeleteSession, apiGetEvents, apiGetFindings, apiEvaluateFindings, apiRerunSession } from './api-routes.js';
+import { apiListMessages, apiPostMessage, apiClaimTurn, apiAssignAgent, apiAdvanceSession } from './collab-routes.js';
 import { handleWsConnection, broadcastEvent } from './ws-handler.js';
 import { getAdapter } from './adapters/adapter-registry.js';
 import { createEvent } from './schema/events.js';
@@ -72,9 +73,9 @@ export class HubServer {
             this._server.once('error', onStartupError);
             this._server.listen(this.port, '127.0.0.1', () => {
                 this._server?.removeListener('error', onStartupError);
-                console.log(`🚀 Hub server running at http://localhost:${this.port}`);
-                console.log(`   REST API: http://localhost:${this.port}/api/sessions`);
-                console.log(`   Dashboard: http://localhost:${this.port}/`);
+                console.error(`🚀 Hub server running at http://localhost:${this.port}`);
+                console.error(`   REST API: http://localhost:${this.port}/api/sessions`);
+                console.error(`   Dashboard: http://localhost:${this.port}/`);
                 resolve();
             });
         });
@@ -116,22 +117,22 @@ export class HubServer {
     async runSession(sessionId) {
         const session = this.activeSessions.get(sessionId);
         if (!session) {
-            console.error(`runSession: Session not found: ${sessionId}`);
+            console.error(`[Orchestrator] runSession: Session not found: ${sessionId}`);
             return;
         }
-        console.log(`[Orchestrator] Starting run for session: ${sessionId}`);
+        console.error(`[Orchestrator] Starting run for session: ${sessionId}`);
 
         try {
             session.start();
             const startEvent = createEvent(sessionId, 'system', 'status', { state: 'running' });
-            console.log(`[Orchestrator] Broadcasting: ${startEvent.event_type} - ${startEvent.payload.state}`);
+            console.error(`[Orchestrator] Broadcasting: ${startEvent.event_type} - ${startEvent.payload.state}`);
             this.broadcast(sessionId, session.addEvent(startEvent));
 
             // Use MCP-backed Codex by default unless a specific adapter is requested.
             const agentId = session.agentId ?? 'mcp-codex';
             const adapter = getAdapter(agentId);
             session.registerAgent(agentId);
-            console.log(`[Orchestrator] Executing adapter: ${agentId}`);
+            console.error(`[Orchestrator] Executing adapter: ${agentId}`);
 
             // For MCP-based adapters, pass reviewOptions as prompt object
             const isMcpAdapter = agentId.startsWith('mcp-');
@@ -140,13 +141,13 @@ export class HubServer {
                 : session.prompt;
             const executionPath = session.snapshotPath ?? session.projectDir;
             const { stream, done } = adapter.execute(sessionId, executionPath, promptArg);
-            console.log(`[Orchestrator] Adapter execution started, got stream and done promise.`);
+            console.error(`[Orchestrator] Adapter execution started, got stream and done promise.`);
 
             for await (const event of stream) {
                 session.addEvent(event);
                 this.broadcast(sessionId, event);
             }
-            console.log(`[Orchestrator] Stream finished.`);
+            console.error(`[Orchestrator] Stream finished.`);
 
             const result = await done;
             const finalState = result.status === 'ok' ? 'completed' : 'failed';
@@ -220,6 +221,28 @@ export class HubServer {
         if (url.pathname.match(/^\/api\/sessions\/[^/]+\/rerun$/) && method === 'POST') {
             const id = url.pathname.split('/')[3] ?? '';
             return apiRerunSession(this, id, req, res);
+        }
+
+        // Collaboration routes
+        if (url.pathname.match(/^\/api\/sessions\/[^/]+\/messages$/) && method === 'GET') {
+            const id = url.pathname.split('/')[3] ?? '';
+            return apiListMessages(this, id, url, res);
+        }
+        if (url.pathname.match(/^\/api\/sessions\/[^/]+\/messages$/) && method === 'POST') {
+            const id = url.pathname.split('/')[3] ?? '';
+            return apiPostMessage(this, id, req, res);
+        }
+        if (url.pathname.match(/^\/api\/sessions\/[^/]+\/claim-turn$/) && method === 'POST') {
+            const id = url.pathname.split('/')[3] ?? '';
+            return apiClaimTurn(this, id, req, res);
+        }
+        if (url.pathname.match(/^\/api\/sessions\/[^/]+\/assignments$/) && method === 'POST') {
+            const id = url.pathname.split('/')[3] ?? '';
+            return apiAssignAgent(this, id, req, res);
+        }
+        if (url.pathname.match(/^\/api\/sessions\/[^/]+\/advance$/) && method === 'POST') {
+            const id = url.pathname.split('/')[3] ?? '';
+            return apiAdvanceSession(this, id, req, res);
         }
 
         // Static file serving for UI

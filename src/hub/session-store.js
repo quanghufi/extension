@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Session } from './session.js';
+import { serializeSession } from './session-serialization.js';
 
 export class SessionStore {
     /**
@@ -35,7 +36,7 @@ export class SessionStore {
         const filePath = this._sessionPath(session.id);
         const tempPath = filePath + '.tmp.' + Date.now();
 
-        const data = JSON.stringify(session.toJSON(), null, 2);
+        const data = JSON.stringify(serializeSession(session), null, 2);
 
         // Write + fsync before rename (crash-safe)
         const fd = fs.openSync(tempPath, 'w');

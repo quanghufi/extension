@@ -202,6 +202,64 @@ $sessionId = $child.childSessionId  # session mới cho round tiếp
 
 ---
 
+## 🤝 Agent-to-Agent Collaboration
+
+Extension Hub hỗ trợ **agent-to-agent collaboration** — Codex và Antigravity phối hợp qua turn-based protocol.
+
+### Collaboration State (`collabState`)
+
+Mỗi session có một `collabState` mô tả tiến trình hợp tác:
+
+| State | Ý nghĩa |
+|-------|---------|
+| `draft` | Session mới, chưa gán agent |
+| `awaiting_assignment` | Đang chờ gán reviewer/responder |
+| `awaiting_codex_turn` | Đến lượt Codex review |
+| `codex_reviewing` | Codex đang review (đã claim turn) |
+| `awaiting_antigravity_turn` | Đến lượt Antigravity phản biện |
+| `antigravity_reviewing` | Antigravity đang phản biện (đã claim turn) |
+| `awaiting_resolution` | Chờ quyết định cuối cùng |
+| `resolved` | Đã giải quyết |
+| `closed` | Đã đóng |
+
+### Turn Ownership
+
+- Agent phải **claim turn** trước khi gửi message quan trọng (review_summary, finding_reply, decision, ...)
+- Turn có TTL (mặc định 10 phút) — hết hạn sẽ tự expire
+- Raw turn token **không hiển thị** trên dashboard — chỉ hiển thị owner và status
+
+### Assignments
+
+| Role | Mặc định | Chức năng |
+|------|----------|-----------|
+| `reviewer` | Codex | Review code, báo findings |
+| `responder` | Antigravity | Phản biện, đánh giá findings |
+| `decider` | Antigravity | Quyết định resolve/close |
+
+### Collaboration API
+
+| Method | Endpoint | Mô tả |
+|--------|----------|-------|
+| POST | `/api/sessions/:id/assignments` | Gán agent vào role |
+| POST | `/api/sessions/:id/claim-turn` | Claim turn |
+| POST | `/api/sessions/:id/messages` | Gửi message |
+| GET | `/api/sessions/:id/messages` | Lấy danh sách messages |
+| POST | `/api/sessions/:id/advance` | Advance collab state |
+
+### Ví dụ flow end-to-end
+
+```
+1. Tạo review session              → collabState: awaiting_codex_turn
+2. Codex claim turn                 → collabState: codex_reviewing
+3. Codex post review_summary        
+4. Codex advance (review_complete)  → collabState: awaiting_antigravity_turn
+5. Antigravity claim turn           → collabState: antigravity_reviewing
+6. Antigravity post finding_reply   
+7. Antigravity advance (resolve)    → collabState: resolved
+```
+
+---
+
 ## ⚠️ Lưu Ý Quan Trọng (Gotchas)
 
 | # | Gotcha | Giải pháp |

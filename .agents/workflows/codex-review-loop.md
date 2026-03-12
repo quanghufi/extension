@@ -1,139 +1,264 @@
 ﻿---
-description: 🔄 Codex Review-Debug Loop (5 rounds tự động)
+description: Codex review-debug loop (up to 5 automatic rounds)
 ---
 
-# Codex Review-Debug Loop
+# Codex Review Loop
 
-**2 AI review:** Codex (GPT) review → Antigravity (Gemini) đánh giá + phản biện → fix → test → lặp lại tối đa 5 rounds.
+**Two-agent review loop:** Codex reviews -> Antigravity evaluates and rebuts -> fixes are applied -> tests are run -> repeat for up to 5 rounds.
 
-**Sử dụng Hub server API** (`http://localhost:3849`) — evaluate + rerun chain.
+Use MCP tools from the `extension-hub` server for direct stdio-based communication.
 
 Before running this loop, Antigravity should follow:
 `./.agents/workflows/antigravity-hub-contract.md`
 
-// turbo-all
+## Phase 0: Verify the Hub MCP Server
 
-## Giai đoạn 0: Kiểm tra Hub server
+Call the MCP tool:
+
+```
+hub_list_sessions()
+```
+
+- If it succeeds, the hub is available over MCP. Continue.
+- If it fails, inspect `~/.gemini/antigravity/mcp_config.json`.
+
+## Phase 1: Determine the Review Target
+
+1. Ask the user which file should be reviewed, or use the currently open file.
+2. Confirm the test command, preferably by auto-detecting it.
+
+## Phase 2: Review Loop (Up to 5 Rounds, Collab-First)
+
+> Default preference: use the shared-thread collaboration flow (`claim -> message -> advance`).
+> Legacy `evaluate -> rerun` is **Compatibility Mode (fallback)**, not the primary path.
+
+### Step 2.1: Create the Review Session (Round 1)
+
+Call the MCP tool:
+
+```js
+hub_create_review({
+    projectDir: "{PROJECT_DIR}",
+    prompt: "Review this code for bugs and issues",
+    reviewTarget: "file",
+    filePath: "{RELATIVE_FILE_PATH}",
+    maxFindings: 15,
+    waitForCompletion: false
+})
+```
+
+The response contains `sessionId`, `state`, and `findingCount`.
+
+`waitForCompletion: false` is the default for the collab-first path so the agent can inspect `collabState`, turn ownership, and messages.
+Use `waitForCompletion: true` only when intentionally choosing **Compatibility Mode (fallback)**.
+
+### Step 2.2: Inspect Session and Collaboration State
+
+Call the MCP tool:
+
+```js
+hub_get_status({ sessionId: "{SESSION_ID}" })
+```
+
+Always check:
+- `session.state`
+- `session.displayState`
+- `session.collabState`
+- `session.assignments`
+- `session.turn`
+
+Safe handling rules:
+- `failed` / `cancelled` -> report the failure and stop.
+- `stalled` -> report `reviewer_stalled`; only use `hub_rerun_review` as fallback.
+- `collabState = draft` or `awaiting_assignment` -> do **not** assume collaboration is ready; verify assignments and only continue the collaboration path once the session enters a valid turn-based state.
+- `collabState` in turn-based states (`awaiting_codex_turn`, `codex_reviewing`, `awaiting_antigravity_turn`, `antigravity_reviewing`, `awaiting_resolution`) -> continue with the collab-first flow.
+
+## Collaboration-Enhanced Flow (Preferred)
+
+> This is the preferred shared-thread collaboration path.
+> Every turn-sensitive message must include a valid `turnToken`.
+
+### Phase A: Setup
+
+```js
+hub_get_status({ sessionId: "{SESSION_ID}" })
+// Check session.collabState
+// Check session.assignments (reviewer, responder, decider)
+// Check session.turn
+```
+
+Notes:
+- Do not assume a newly created session is already `awaiting_codex_turn`.
+- If the session is still `draft`, follow the contract to decide between assignment handling and fallback; do not post turn-sensitive messages yet.
+
+### Phase B: Codex Turn
+
+```js
+// Codex claims the turn
+const codexTurn = hub_claim_turn({ sessionId: "{SESSION_ID}", agentId: "codex" })
+
+// Codex posts a review summary with the turn token
+hub_post_message({
+    sessionId: "{SESSION_ID}",
+    agentId: "codex",
+    role: "reviewer",
+    type: "review_summary",
+    content: "Found N issues in {FILE}...",
+    turnToken: codexTurn.token
+})
+
+// Optional: fetch findings for detailed inspection
+hub_get_findings({ sessionId: "{SESSION_ID}" })
+
+// Codex advances the state to Antigravity's turn
+hub_advance_session({
+    sessionId: "{SESSION_ID}",
+    agentId: "codex",
+    action: "review_complete"
+})
+```
+
+### Phase C: Antigravity Turn
+
+```js
+// Antigravity claims the turn
+const antiTurn = hub_claim_turn({ sessionId: "{SESSION_ID}", agentId: "antigravity" })
+
+// Read Codex messages
+hub_list_messages({ sessionId: "{SESSION_ID}" })
+
+// Antigravity may also inspect findings directly
+hub_get_findings({ sessionId: "{SESSION_ID}" })
+
+// Antigravity replies with a rebuttal using the turn token
+hub_post_message({
+    sessionId: "{SESSION_ID}",
+    agentId: "antigravity",
+    role: "responder",
+    type: "finding_reply",
+    content: "Finding F-XXX is a false positive because...",
+    turnToken: antiTurn.token
+})
+
+// Advance: request rerun if fixes are needed, or mark the review complete
+hub_advance_session({
+    sessionId: "{SESSION_ID}",
+    agentId: "antigravity",
+    action: "request_rerun" // or "review_complete"
+})
+```
+
+### Phase D: Fix and Verify
+
+Antigravity should **not** fix blindly.
+
+1. Read the code at the lines Codex referenced.
+2. Look for reasons a finding might be a false positive.
+3. Only fix bugs that are actually accepted.
+4. Run tests.
 
 ```powershell
-Invoke-RestMethod -Uri "http://localhost:3849/api/sessions" -Method GET
+node --test src/**/*.test.js
 ```
 
-Nếu Hub server chưa chạy → khởi động:
-```powershell
-node src/server.js
+### Phase E: Resolution
+
+When enough rounds have been completed and the conclusion is clear:
+
+```js
+hub_advance_session({
+    sessionId: "{SESSION_ID}",
+    agentId: "antigravity",
+    action: "resolve"
+})
 ```
 
-## Giai đoạn 1: Xác định target
+If the session should be closed entirely:
 
-1. Hỏi user file nào cần review (hoặc dùng file đang mở)
-2. Xác nhận test command (auto-detect)
-
-## Giai đoạn 2: Review Loop (tối đa 5 rounds)
-
-### Step 2.1: Tạo session (Round 1)
-
-```powershell
-$body = @{
-    projectDir = "d:/extension"
-    prompt = "Review this code for bugs and issues"
-    agentId = "mcp-codex"
-    label = "Review {FILE_NAME} Round 1"
-    reviewOptions = @{
-        review_target = "file"
-        file_path = "{RELATIVE_FILE_PATH}"
-        max_findings = 15
-    }
-} | ConvertTo-Json -Depth 3
-
-$r = Invoke-RestMethod -Uri "http://localhost:3849/api/sessions" -Method POST -ContentType "application/json" -Body $body
-$sessionId = $r.session.id
+```js
+hub_advance_session({
+    sessionId: "{SESSION_ID}",
+    agentId: "antigravity",
+    action: "close"
+})
 ```
 
-### Step 2.2: Wait for result and fetch findings safely
+Only do this when the collaboration state allows it. In particular, `resolve` is valid only from `awaiting_resolution`.
 
-Do not poll only on `session.state == running`.
-Use `session.displayState` and `watchdog.stalled` from:
-`./.agents/workflows/antigravity-hub-contract.md`
+### Phase F: Next Round
 
-Only fetch findings after `session.state == "completed"`.
-If the review becomes `stalled`, stop polling and treat it as a runtime issue.
+If `round < 5` and another review pass is needed after fixes:
 
-### Step 2.3: ⚠️ Đánh Giá + Tranh Luận (BẮT BUỘC)
+- Prefer preserving the message thread and session context through the collaboration flow.
+- Then create or rerun the next round according to the current contract.
+- Every new round must return to **Step 2.2** and re-check the real `collabState`; never assume it.
 
-**KHÔNG FIX MÙ QUÁNG.**
+## Compatibility Mode (Fallback)
 
-Antigravity **BẮT BUỘC phản biện** mọi finding vì chỉ có 1 reviewer:
-1. Đọc code tại dòng Codex chỉ ra
-2. **Tìm lý do ĐỂ BÁC BỎ** bug — kiểm tra xem có thể là false positive không
-3. Nếu tìm được lý do phản bác → tranh luận
-4. Nếu không tìm được lý do phản bác → đồng ý fix
+Use this only when the collab-first flow is unavailable or the current session or runtime has not entered a valid turn-based path yet.
 
-> Mục đích: Antigravity đóng vai "devil's advocate" để đảm bảo chỉ fix bug thật.
+### Compatibility Guardrails
 
-### Step 2.4: Gửi evaluations về Hub
+- If `collabState` is still `draft` or `awaiting_assignment`, do **not** use collab advance actions such as `resolve` or `close` to force completion.
+- In this mode, prefer `hub_get_status`, `hub_get_findings`, `hub_evaluate_findings`, and `hub_rerun_review`.
+- If a new round is needed, the new session must start again from **Step 2.2** and re-check `collabState`.
 
-```powershell
-$evaluations = @{
-    evaluations = @(
-        @{ findingId = "F-XXXXX"; verdict = "agree"; reason = "Valid bug"; action = "fix" }
-        @{ findingId = "F-YYYYY"; verdict = "disagree"; reason = "False positive because..."; action = "skip" }
-    )
-} | ConvertTo-Json -Depth 3
+### Fallback 1: Poll Completion
 
-Invoke-RestMethod -Uri "http://localhost:3849/api/sessions/$sessionId/findings/evaluate" -Method POST -ContentType "application/json" -Body $evaluations
+```js
+hub_get_status({ sessionId: "{SESSION_ID}" })
 ```
 
-### Step 2.5: Fix confirmed bugs
-- Chỉ fix bugs verdict = "agree"
+- `completed` -> fetch findings
+- `stalled` -> consider fallback rerun
+- `failed` / `cancelled` -> stop
 
-### Step 2.6: Chạy tests
-```powershell
-node --test src/hub/session.test.js
+### Fallback 2: Evaluate Findings
+
+```js
+hub_get_findings({ sessionId: "{SESSION_ID}" })
+
+hub_evaluate_findings({
+    sessionId: "{SESSION_ID}",
+    evaluations: [
+        { dedupeKey: "abc123", verdict: "accepted", rationale: "Valid bug: variable can be null" },
+        { dedupeKey: "def456", verdict: "rejected", rationale: "False positive: guarded at line 42" }
+    ]
+})
 ```
 
-### Step 2.7: Rerun (tạo child session cho round tiếp)
+### Fallback 3: Rerun Review
 
-Nếu round < 5 và có findings bị reject cần re-check:
-
-```powershell
-$rerunBody = @{ context = "Round {N+1}: Re-review after fixes" } | ConvertTo-Json
-$child = Invoke-RestMethod -Uri "http://localhost:3849/api/sessions/$sessionId/rerun" -Method POST -ContentType "application/json" -Body $rerunBody
-$sessionId = $child.childSessionId  # Update sessionId cho round tiếp
+```js
+hub_rerun_review({
+    sessionId: "{SESSION_ID}",
+    prompt: "Round {N+1}: Re-review after fixes were applied",
+    waitForCompletion: true
+})
 ```
 
-Quay lại Step 2.2 với session mới.
+The response contains a new `sessionId`; use it for the next round.
 
-### Step 2.8: Đánh giá
-- round < 5 và còn bugs → quay lại Step 2.2
-- clean hoặc round = 5 → bước 3
+### Fallback Rules
 
+- Do not use `hub_evaluate_findings` as the primary collaboration mechanism when `claim -> message -> advance` is available.
+- Do not use `hub_rerun_review` as the first instinct when the session is still in a valid collaboration turn flow.
+- After fallback creates a new session that supports collaboration clearly, return to the collab-first path.
 
-## Giai đoạn 3: Tổng kết
+### Legacy vs Collaboration Mode
 
-Báo cáo: rounds, bugs found/fixed/rejected, nguồn (Codex).
+| Aspect | Legacy (Compatibility) | Collaboration (Preferred) |
+|--------|-------------------------|---------------------------|
+| Evaluate findings | `hub_evaluate_findings` | `hub_post_message` (`finding_reply`) |
+| Rerun | `hub_rerun_review` | `hub_advance_session` (`request_rerun`) |
+| Flow control | Poll-based | Turn-based (`claim -> message -> advance`) |
+| Thread history | No message thread | Full message thread with replies |
 
-### Step 3.1: 🧹 Dọn dẹp sessions
+## Next Steps Menu
 
-Sau khi tổng kết, xóa toàn bộ session chain (bao gồm cả session stalled nếu có):
-
-```powershell
-# Xóa tất cả session IDs đã tạo trong loop (bao gồm stalled + review chain)
-$allSessionIds = @("{SESSION_ID_R1}", "{SESSION_ID_R2}", ...)  # Tất cả IDs đã thu thập
-foreach ($id in $allSessionIds) {
-    try {
-        Invoke-RestMethod -Uri "http://localhost:3849/api/sessions/$id" -Method DELETE
-        Write-Host "Deleted: $($id.Substring(0,8))..."
-    } catch { Write-Host "Skip: $($id.Substring(0,8))..." }
-}
 ```
-
-> **Lưu ý:** Thu thập tất cả session IDs (cả stalled, failed) trong quá trình chạy loop để xóa sạch ở bước này.
-
-## NEXT STEPS menu
-```
-1. /run    → Chạy thử
-2. /test   → Chạy test
-3. /deploy → Deploy
-4. /next   → Gợi ý tiếp
+1. /run    -> Run it
+2. /test   -> Run tests
+3. /deploy -> Deploy
+4. /next   -> Suggest next actions
 ```

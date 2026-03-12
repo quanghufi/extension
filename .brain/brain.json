@@ -7,7 +7,7 @@
     "name": "extension-hub",
     "description": "Multi-agent communication hub — AI agents (Antigravity, Codex via MCP) collaborate on code review via event-driven architecture",
     "type": "developer-tool",
-    "status": "Phase 1 Complete, Phase 2 In Progress, Phase 4+5 Reviewed",
+    "status": "v1.0.0 Released — Global npm package, pushed to GitHub",
     "created_at": "2026-03-08T11:27:26+07:00"
   },
   "tech_stack": {
