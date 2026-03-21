@@ -5,25 +5,26 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$packageRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$workspaceRoot = (Get-Location).Path
 $bridgeCandidates = @(
     (Join-Path $PSScriptRoot "codex_review_mcp.py"),
-    (Join-Path $repoRoot "scripts\codex_review_mcp.py")
+    (Join-Path $packageRoot "src\mcp\codex_review_mcp.py")
 )
 $schemaCandidates = @(
     (Join-Path $PSScriptRoot "codex_review_schema.json"),
-    (Join-Path $repoRoot "scripts\codex_review_schema.json")
+    (Join-Path $packageRoot "src\mcp\codex_review_schema.json")
 )
 
 $bridgePath = $bridgeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 $schemaPath = $schemaCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 
 if (-not $bridgePath) {
-    throw "Could not find codex_review_mcp.py in scripts1 or scripts."
+    throw "Could not find codex_review_mcp.py in the packaged src\\mcp runtime."
 }
 
 if (-not $schemaPath) {
-    throw "Could not find codex_review_schema.json in scripts1 or scripts."
+    throw "Could not find codex_review_schema.json in the packaged src\\mcp runtime."
 }
 
 $bridgePath = (Resolve-Path $bridgePath).Path
@@ -49,7 +50,7 @@ if ($python) {
 $serverArgs = $pythonPrefixArgs + @(
     $bridgePath,
     "--workspace",
-    $repoRoot,
+    $workspaceRoot,
     "--schema",
     $schemaPath,
     "--codex-timeout-sec",
@@ -64,7 +65,7 @@ $serverDefinition = @{
 
 $json = $serverDefinition | ConvertTo-Json -Compress
 
-Write-Host "Registering MCP server '$ServerName' in Antigravity..."
+Write-Host "Registering MCP server '$ServerName' in Antigravity for workspace: $workspaceRoot"
 $antigravityExe = $antigravity.Source
 $env:CODEX_REVIEW_REGISTRATION_JSON = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
 $env:CODEX_REVIEW_ANTIGRAVITY_EXE = $antigravityExe

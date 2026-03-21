@@ -9,24 +9,25 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path $RepoPath).Path
+$packageRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $bridgeCandidates = @(
-    (Join-Path $repoRoot "scripts1\codex_review_mcp.py"),
-    (Join-Path $repoRoot "scripts\codex_review_mcp.py")
+    (Join-Path $PSScriptRoot "codex_review_mcp.py"),
+    (Join-Path $packageRoot "src\mcp\codex_review_mcp.py")
 )
 $schemaCandidates = @(
-    (Join-Path $repoRoot "scripts1\codex_review_schema.json"),
-    (Join-Path $repoRoot "scripts\codex_review_schema.json")
+    (Join-Path $PSScriptRoot "codex_review_schema.json"),
+    (Join-Path $packageRoot "src\mcp\codex_review_schema.json")
 )
 
 $bridgePath = $bridgeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 $schemaPath = $schemaCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 
 if (-not $bridgePath) {
-    throw "Could not find codex_review_mcp.py in scripts1 or scripts for repo: $repoRoot"
+    throw "Could not find codex_review_mcp.py in the packaged src\\mcp runtime for repo: $repoRoot"
 }
 
 if (-not $schemaPath) {
-    throw "Could not find codex_review_schema.json in scripts1 or scripts for repo: $repoRoot"
+    throw "Could not find codex_review_schema.json in the packaged src\\mcp runtime for repo: $repoRoot"
 }
 
 $bridgePath = (Resolve-Path $bridgePath).Path
