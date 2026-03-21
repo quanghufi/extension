@@ -2,10 +2,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    COLLAB_STATES, COLLAB_TERMINAL_STATES, TURN_STATUS, ADVANCE_ACTIONS,
+    COLLAB_STATES, COLLAB_TERMINAL_STATES, COLLAB_TURN_BASED_STATES, TURN_STATUS, ADVANCE_ACTIONS,
     defaultAssignments, createDefaultTurn,
     expectedAgentForState, transitionOnAssignments,
-    claimStateForAgent, waitingStateForAgent,
+    claimStateForAgent, waitingStateForAgent, isCollabTurnBased,
     isValidTransition, validateAdvanceAction, deriveNextCollabState,
 } from './session-collab.js';
 
@@ -25,6 +25,15 @@ describe('session-collab', () => {
         it('ADVANCE_ACTIONS has 6 actions', () => {
             assert.equal(ADVANCE_ACTIONS.length, 6);
         });
+        it('COLLAB_TURN_BASED_STATES has 5 active states', () => {
+            assert.deepEqual([...COLLAB_TURN_BASED_STATES], [
+                'awaiting_codex_turn',
+                'codex_reviewing',
+                'awaiting_antigravity_turn',
+                'antigravity_reviewing',
+                'awaiting_resolution',
+            ]);
+        });
     });
 
     describe('defaultAssignments', () => {
@@ -43,6 +52,20 @@ describe('session-collab', () => {
             assert.equal(t.ownerId, null);
             assert.equal(t.token, null);
         });
+    });
+
+    describe('isCollabTurnBased', () => {
+        for (const collabState of COLLAB_TURN_BASED_STATES) {
+            it(`returns true for ${collabState}`, () => {
+                assert.equal(isCollabTurnBased(collabState), true);
+            });
+        }
+
+        for (const collabState of ['draft', 'awaiting_assignment', 'failed', 'resolved', 'closed']) {
+            it(`returns false for ${collabState}`, () => {
+                assert.equal(isCollabTurnBased(collabState), false);
+            });
+        }
     });
 
     describe('expectedAgentForState', () => {

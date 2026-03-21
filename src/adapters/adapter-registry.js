@@ -18,6 +18,7 @@
  */
 
 import { CodexAdapter } from './codex-adapter.js';
+import { ClaudeCodeAdapter } from './claude-code-adapter.js';
 import { GenericAdapter, defaultSeverityMapper } from './generic-adapter.js';
 import { McpCodexAdapter } from './mcp-adapter.js';
 
@@ -49,6 +50,7 @@ function registerBuiltin(adapter) {
 // ── Pre-register built-in adapters ───────────────────
 
 registerBuiltin(new CodexAdapter());
+registerBuiltin(new ClaudeCodeAdapter());
 registerBuiltin(new McpCodexAdapter());
 
 // ── Public API ───────────────────────────────────────
@@ -141,6 +143,7 @@ export function unregisterAdapter(agentId) {
 export function resetRegistry() {
     registry.clear();
     registerBuiltin(new CodexAdapter());
+    registerBuiltin(new ClaudeCodeAdapter());
     registerBuiltin(new McpCodexAdapter());
 }
 

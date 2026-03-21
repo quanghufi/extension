@@ -14,9 +14,9 @@ describe('CodexAdapter', () => {
         const { cmd, args } = adapter.buildCommand('/path/to/snapshot', 'Review this code');
 
         assert.equal(cmd, 'codex');
-        assert.deepEqual(args.slice(0, 4), ['exec', 'review', '--skip-git-repo-check', '--json']);
-        assert.match(args[4], /Return the final answer as a JSON array only\./);
-        assert.match(args[4], /Review this code/);
+        assert.deepEqual(args.slice(0, 3), ['exec', 'review', '--json']);
+        assert.match(args[3], /Return the final answer as a JSON array only\./);
+        assert.match(args[3], /Review this code/);
     });
 
     it('uses default base timeouts', () => {
@@ -66,7 +66,7 @@ describe('CodexAdapter.parseChunk', () => {
     });
 
     it('silently skips progress bars', () => {
-        const events = adapter.parseChunk('¦¦¦¦¦¦¦¦', 'sess-1');
+        const events = adapter.parseChunk('Â¦Â¦Â¦Â¦Â¦Â¦Â¦Â¦', 'sess-1');
         assert.equal(events.length, 0);
     });
 });

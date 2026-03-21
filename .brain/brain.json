@@ -70,6 +70,20 @@
       "name": "Phase 4+5 Codex Review Loop",
       "status": "complete",
       "description": "5-round Codex review of server.js: 8 bugs fixed (session save, start() reject, path traversal, bind 127.0.0.1, isFile check, removeListener). 8/8 rebuttals won."
+    },
+    {
+      "name": "Multi-Agent Debate Review",
+      "status": "verified",
+      "description": "Claude Code + Codex review song song, cross-evaluate, debate N rounds, consensus merge + final report cho Antigravity. 8 debate findings fixed (P0-P3).",
+      "phases": [
+        "Sub-phase A: Claude adapter (DONE)",
+        "Sub-phase B: Debate engine (DONE — 7/8 findings fixed, 1 deferred)"
+      ]
+    },
+    {
+      "name": "Claude Code Adapter",
+      "status": "verified",
+      "description": "ClaudeCodeAdapter + parsing module. 24 tests pass. Registered in adapter-registry. Live review verified: 12 findings from base-adapter.js review (session b6316361)."
     }
   ],
   "scripts": {
@@ -84,7 +98,7 @@
     },
     {
       "decision": "3-tier timeout: firstByte/idle/hard",
-      "reason": "Codex: 45s/20s/90s, Claude: 90s/30s/120s"
+      "reason": "Codex: 45s/20s/90s, Claude: 300s/60s/600s (increased after timeout bugs — reviews take 2-5 min)"
     },
     {
       "decision": "Codex output goes to stderr",
@@ -117,6 +131,26 @@
     {
       "decision": "createRetry forwards all config",
       "reason": "Old createRetry only forwarded prompt. Now forwards agentId, reviewOptions, snapshotPath, round, label."
+    },
+    {
+      "decision": "Debate state must use 'failed' not 'debate_failed'",
+      "reason": "debate-state.js enum only has idle/reviewing/evaluating/debating/done/failed. Custom states break state machine."
+    },
+    {
+      "decision": "activeSessions.delete in finally block",
+      "reason": "Memory leak: if runDebate throws, sessionId stays in activeSessions forever. finally{} ensures cleanup."
+    },
+    {
+      "decision": "Validate adapters before debate start",
+      "reason": "hub_start_debate acknowledged success before verifying adapters exist. Now hasAdapter() check is synchronous."
+    },
+    {
+      "decision": "Debate gating on ALL REST collab routes",
+      "reason": "MCP tools had debate gating but REST routes didn't. blockIfDebateActive() returns 409 DEBATE_ACTIVE."
+    },
+    {
+      "decision": "expireTurnIfNeeded → waitingStateForAgent()",
+      "reason": "Dead-end: expired turns always went to awaiting_assignment. Now recovers to correct waiting state for the role."
     }
   ],
   "knowledge_items": {
@@ -131,14 +165,44 @@
       "Duplicate method definitions in JS class: later definition silently overrides earlier one at runtime. TS lint shows 'Duplicate function implementation' but easy to miss.",
       "Rerun with rebuttals context can cause Codex to return 0 findings (too aggressive context). Fresh run on same file produces 7-8 findings. Rerun prompt needs tuning.",
       "PowerShell ConvertTo-Json truncates nested objects. Use -Depth 3+ for complex request bodies.",
-      "Claude Code CLI removed from project — only Codex via MCP adapter now",
+      "Claude Code CLI re-added as ClaudeCodeAdapter for multi-agent review",
       "path.join + startsWith can be tricked by sibling dirs sharing prefix (ui vs ui-secret). Fix: startsWith(dir + path.sep)",
       "http.Server.listen(port) without host binds to 0.0.0.0 not 127.0.0.1. Always specify '127.0.0.1' for localhost-only.",
       "removeAllListeners('error') removes ALL error handlers, not just yours. Use named function + removeListener(fn).",
       "existsSync returns true for directories. Always check statSync().isFile() before createReadStream.",
       "Codex MCP adapter can stall — Hub watchdog detects via idleMs > 45s. Fix: restart Hub server.",
       "Codex keeps re-raising the same finding with different framing after withdrawal. Stream error raised 3x, withdrawn 3x.",
-      "PowerShell `exit` in inline code (run_command) kills entire shell process. Use `break` + `$result` variable instead. Only use `exit` in .ps1 script files."
+      "PowerShell `exit` in inline code (run_command) kills entire shell process. Use `break` + `$result` variable instead. Only use `exit` in .ps1 script files.",
+      {
+        "issue": "createEvent takes 4 positional args (sessionId, agentId, eventType, payload) NOT options object",
+        "files": [
+          "src/schema/events.js"
+        ]
+      },
+      {
+        "issue": "createFinding requires summary/evidence/file (NOT title/description/category). Auto-generates id and dedupe_key.",
+        "files": [
+          "src/schema/events.js"
+        ]
+      },
+      {
+        "issue": "listAdapters() returns string[] of agent IDs, not adapter objects",
+        "files": [
+          "src/adapters/adapter-registry.js"
+        ]
+      },
+      {
+        "issue": "e2e-test.js imported 'ClaudeAdapter' from 'claude-adapter.js' — file renamed to 'claude-code-adapter.js' with class 'ClaudeCodeAdapter'",
+        "files": ["scripts/e2e-test.js"]
+      },
+      {
+        "issue": "server.js runDebate catch used invalid state 'debate_failed' — must use 'failed' per debate-state.js enum",
+        "files": ["src/server.js", "src/hub/debate-state.js"]
+      },
+      {
+        "issue": "REST apiAdvanceSession didn't pass turnToken to advanceCollabState — turn-sensitive actions silently failed",
+        "files": ["src/collab-routes.js"]
+      }
     ],
     "conventions": [
       "Vietnamese comments/docs normal (bilingual project)",
@@ -146,6 +210,23 @@
       "File splitting: warn >200 LOC, must split >300 LOC",
       "Session data in tmp/<script>-data/sessions/*.json",
       "Full combined output saved to tmp/consult-*-combined.txt"
+    ],
+    "patterns": [
+      {
+        "name": "Claude Code CLI Adapter Pattern",
+        "description": "ClaudeCodeAdapter extends BaseAdapter for Claude Code CLI. Uses -p --output-format stream-json --verbose. CRITICAL: Claude sends plain text to stdout (NOT NDJSON), so allOutput is raw text with embedded JSON. 5-strategy finding extraction: (1) NDJSON result line, (2) NDJSON result text JSON, (3) assistant messages JSON, (4) raw allOutput text JSON, (5) text fallback. Field mapping: issue/detail/recommendation → summary/evidence.",
+        "files": [
+          "src/adapters/claude-code-adapter.js",
+          "src/adapters/claude-code-parsing.js"
+        ]
+      },
+      {
+        "name": "Claude Code stdout is plain text, not NDJSON",
+        "description": "Despite using --output-format stream-json, Claude Code CLI sends result text directly to stdout — NOT wrapped in NDJSON {type:result,result:...} format. The parseClaudeResult MUST NOT early-return when extractResultText() returns null. Strategy 4 (parse allOutput directly) is the one that works in practice.",
+        "files": [
+          "src/adapters/claude-code-parsing.js"
+        ]
+      }
     ]
   }
 }

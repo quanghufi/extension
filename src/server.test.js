@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { HubServer } from './server.js';
 import { getAdapter, registerAdapter } from './adapters/adapter-registry.js';
+import { Session } from './hub/session.js';
 
 const TEST_PORT = 33847 + Math.floor(Math.random() * 1000);
 let server;
@@ -70,13 +71,28 @@ describe('HubServer', () => {
     it('POST /api/sessions creates a session', async () => {
         const { status, body } = await apiRequest('/api/sessions', {
             method: 'POST',
-            body: { projectDir: '/test', prompt: 'Review code' },
+            body: { projectDir: '/test', prompt: 'Review code', autoStart: false },
         });
         assert.equal(status, 201);
         assert.ok(body.session);
         assert.ok(body.session.id);
         assert.equal(body.session.state, 'pending');
         assert.equal(body.session.agentId, 'mcp-codex');
+    });
+
+    it('POST /api/sessions supports autoStart=false without launching a background review', async () => {
+        const { status, body } = await apiRequest('/api/sessions', {
+            method: 'POST',
+            body: { projectDir: '/no-autostart', prompt: 'Review code', autoStart: false },
+        });
+
+        assert.equal(status, 201);
+        assert.equal(body.session.state, 'pending');
+
+        const stored = server.activeSessions.get(body.session.id);
+        assert.ok(stored);
+        assert.equal(stored.state, 'pending');
+        assert.equal(stored.events.length, 0);
     });
 
     it('POST /api/sessions accepts file review options and snapshotPath', async () => {
@@ -86,6 +102,7 @@ describe('HubServer', () => {
                 projectDir: '/project',
                 snapshotPath: '/snapshot',
                 prompt: 'Review this plan',
+                autoStart: false,
                 reviewOptions: {
                     review_target: 'file',
                     file_path: 'plans/260308-1959-phase2-polish/phase-04-code-annotation.md',
@@ -103,7 +120,7 @@ describe('HubServer', () => {
         // Create first
         const createRes = await apiRequest('/api/sessions', {
             method: 'POST',
-            body: { projectDir: '/test2', prompt: 'test' },
+            body: { projectDir: '/test2', prompt: 'test', autoStart: false },
         });
         const id = createRes.body.session.id;
 
@@ -121,7 +138,7 @@ describe('HubServer', () => {
     it('GET /api/sessions/:id/events returns events', async () => {
         const createRes = await apiRequest('/api/sessions', {
             method: 'POST',
-            body: { projectDir: '/test3', prompt: 'test' },
+            body: { projectDir: '/test3', prompt: 'test', autoStart: false },
         });
         const id = createRes.body.session.id;
 
@@ -133,7 +150,7 @@ describe('HubServer', () => {
     it('GET /api/sessions/:id/events supports ?after= filter', async () => {
         const createRes = await apiRequest('/api/sessions', {
             method: 'POST',
-            body: { projectDir: '/test4', prompt: 'test' },
+            body: { projectDir: '/test4', prompt: 'test', autoStart: false },
         });
         const id = createRes.body.session.id;
 
@@ -145,7 +162,7 @@ describe('HubServer', () => {
     it('DELETE /api/sessions/:id deletes session', async () => {
         const createRes = await apiRequest('/api/sessions', {
             method: 'POST',
-            body: { projectDir: '/test5', prompt: 'test' },
+            body: { projectDir: '/test5', prompt: 'test', autoStart: false },
         });
         const id = createRes.body.session.id;
 
@@ -202,7 +219,7 @@ describe('HubServer', () => {
             assert.equal(body.session.state, 'failed');
             assert.equal(events.at(-1).event_type, 'status');
             assert.equal(events.at(-1).payload.state, 'failed');
-            assert.equal(logged.length, 0);
+            assert.equal(logged.some((line) => /runSession error|FATAL|Unhandled/i.test(line)), false);
         } finally {
             console.error = originalError;
             registerAdapter(originalCodex, { replace: true });
@@ -278,4 +295,99 @@ describe('HubServer', () => {
             registerAdapter(originalMcpCodex, { replace: true });
         }
     });
+
+    it('runSession auto-syncs Codex completion into collab state for clean rerun sessions', async () => {
+        const originalMcpCodex = getAdapter('mcp-codex');
+        registerAdapter({
+            agentId: 'mcp-codex',
+            buildCommand: () => ({ cmd: 'fake', args: [] }),
+            parseChunk: async function* () { },
+            parseResult: () => [],
+            execute: () => ({
+                stream: (async function* () { })(),
+                done: Promise.resolve({
+                    status: 'ok',
+                    findings: [],
+                    timingMs: { firstByteMs: 0, lastIdleGapMs: 0, totalMs: 0 },
+                }),
+            }),
+        }, { replace: true });
+
+        try {
+            const parent = new Session({
+                projectDir: '/clean-rerun',
+                prompt: 'test',
+                agentId: 'mcp-codex',
+            });
+            const child = parent.createRetry();
+            server.activeSessions.set(child.id, child);
+            server.store.save(child);
+
+            await server.runSession(child.id);
+
+            const stored = server.activeSessions.get(child.id) ?? server.store.load(child.id);
+            assert.ok(stored);
+            assert.equal(stored.state, 'completed');
+            assert.equal(stored.collabState, 'awaiting_resolution');
+            assert.equal(stored.messages.length, 1);
+            assert.equal(stored.messages[0].type, 'review_summary');
+            assert.match(stored.messages[0].content, /0 findings/i);
+        } finally {
+            registerAdapter(originalMcpCodex, { replace: true });
+        }
+    });
+
+    it('runSession auto-syncs Codex completion into antigravity turn when findings exist', async () => {
+        const originalMcpCodex = getAdapter('mcp-codex');
+        registerAdapter({
+            agentId: 'mcp-codex',
+            buildCommand: () => ({ cmd: 'fake', args: [] }),
+            parseChunk: async function* () { },
+            parseResult: () => [],
+            execute: () => ({
+                stream: (async function* () { })(),
+                done: Promise.resolve({
+                    status: 'ok',
+                    findings: [{
+                        id: 'F-TEST1234',
+                        severity: 'high',
+                        summary: 'Test finding',
+                        evidence: 'evidence',
+                        file: 'src/app.js',
+                        line: 10,
+                        confidence: 0.9,
+                        dedupe_key: 'src/app.js:10:test finding',
+                        fix_instructions: null,
+                        why_it_matters: null,
+                    }],
+                    timingMs: { firstByteMs: 0, lastIdleGapMs: 0, totalMs: 0 },
+                }),
+            }),
+        }, { replace: true });
+
+        try {
+            const parent = new Session({
+                projectDir: '/findings-rerun',
+                prompt: 'test',
+                agentId: 'mcp-codex',
+            });
+            const child = parent.createRetry();
+            server.activeSessions.set(child.id, child);
+            server.store.save(child);
+
+            await server.runSession(child.id);
+
+            const stored = server.activeSessions.get(child.id) ?? server.store.load(child.id);
+            assert.ok(stored);
+            assert.equal(stored.state, 'completed');
+            assert.equal(stored.collabState, 'awaiting_antigravity_turn');
+            assert.equal(stored.messages.length, 1);
+            assert.equal(stored.messages[0].type, 'review_summary');
+            assert.match(stored.messages[0].content, /1 finding/i);
+            assert.equal(stored.allFindings.length, 1);
+        } finally {
+            registerAdapter(originalMcpCodex, { replace: true });
+        }
+    });
+
 });

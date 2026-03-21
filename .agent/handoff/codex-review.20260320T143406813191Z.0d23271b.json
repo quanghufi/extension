@@ -1,0 +1,69 @@
+{
+  "status": "has_findings",
+  "summary": "Found 6 material issues in the current change set, including a missing debate entrypoint, two collaboration deadlocks, incomplete debate gating, shutdown regression, and stale Claude parser tests.",
+  "findings": [
+    {
+      "severity": "critical",
+      "title": "`hub_start_debate` calls a `HubServer.runDebate()` method that does not exist",
+      "why_it_matters": "Any real call to `hub_start_debate` will throw immediately instead of starting a debate. The new MCP tool is effectively broken in production, and the new debate tests would also fail once executed.",
+      "file": "src/server.js",
+      "line": null,
+      "fix_instructions": "Add a public `async runDebate(sessionId, config)` method on `HubServer` that loads the session, instantiates `DebateExecutor`, emits/persists debate lifecycle events, saves final findings back to the session, and clears `debateActive` on both success and failure. If debate support is not ready, remove `hub_start_debate` and its tests from this change set.",
+      "confidence": "high"
+    },
+    {
+      "severity": "high",
+      "title": "`request_rerun` from `awaiting_resolution` became impossible after turn-token enforcement",
+      "why_it_matters": "`validateAdvanceAction()` still allows `request_rerun` in `awaiting_resolution`, but `advanceCollabState()` now requires turn ownership for that action. No agent can hold a turn in `awaiting_resolution`, so deciders can no longer request a rerun from the resolution step.",
+      "file": "src/hub/session.js",
+      "line": 355,
+      "fix_instructions": "Remove `request_rerun` from `TURN_REQUIRED_ACTIONS`, or redesign the resolution state so the decider can legitimately claim a turn there before requesting rerun. Add a test that exercises `request_rerun` from `awaiting_resolution` and verifies it succeeds for the decider without an impossible token precondition.",
+      "confidence": "high"
+    },
+    {
+      "severity": "high",
+      "title": "Expired turns transition the collaboration state to an undefined `idle` state and strand the session",
+      "why_it_matters": "`expireTurnIfNeeded()` now sets `collabState` to `idle`, but `idle` is not part of the collaboration state machine and `claimTurn()` does not allow claiming from it. After a turn expires, the session becomes unrecoverable and legacy-tool blocking also stops applying because `idle` is not treated as an active collaboration state.",
+      "file": "src/hub/session.js",
+      "line": 391,
+      "fix_instructions": "Do not assign `collabState = 'idle'` on turn expiry. Instead, transition back to the correct waiting state for the expired owner or add a fully supported `idle` state across `session-collab.js`, `claimTurn()`, transition validation, and MCP/API gating. Add a regression test that expires a claimed turn and verifies another valid actor can continue the workflow.",
+      "confidence": "high"
+    },
+    {
+      "severity": "medium",
+      "title": "Claude parser tests still expect `raw_output` events after the duplicate-output fix",
+      "why_it_matters": "`parseStreamLine()` now emits only a semantic status event for assistant messages, but the updated test still asserts two events and checks `raw_output`. This makes the new parser suite fail and leaves the duplicate-output fix unverified.",
+      "file": "src/adapters/claude-code-adapter.test.js",
+      "line": 105,
+      "fix_instructions": "Update the assistant-message assertions to expect the single `status`/`agent_message` event that `parseStreamLine()` now returns, and add one explicit regression test proving no duplicate `raw_output` event is produced for assistant chunks.",
+      "confidence": "high"
+    },
+    {
+      "severity": "medium",
+      "title": "Debate gating does not block `hub_claim_turn` or `hub_assign_agent` during an active debate",
+      "why_it_matters": "The change claims to block manual collaboration tools while debate is active, but only `hub_post_message` and `hub_advance_session` are gated. An agent can still claim turns or reassign reviewer/responder/decider mid-debate, which lets manual actions race with the automated debate engine and mutate the session underneath it.",
+      "file": "src/mcp-collab-tools.js",
+      "line": 163,
+      "fix_instructions": "Apply `getDebateGatingBlock()` to `hub_claim_turn` and `hub_assign_agent` as well, and add MCP-level tests that assert all mutating collaboration tools reject requests while `session.debateActive === true`.",
+      "confidence": "high"
+    },
+    {
+      "severity": "medium",
+      "title": "Server shutdown now waits on never-started `pending` sessions for up to 30 seconds",
+      "why_it_matters": "`stop()` tries to skip non-running sessions by excluding `state === 'idle'`, but `Session.state` never uses `idle`; newly created `autoStart:false` sessions remain `pending`. Those sessions are still counted as running, so shutdown can stall for the full timeout despite no work being in flight.",
+      "file": "src/server.js",
+      "line": 94,
+      "fix_instructions": "Change the shutdown filter to wait only for actually executing sessions, for example `s.state === 'running'`, or track active executions separately from `activeSessions`. Add a shutdown test that creates a pending `autoStart:false` session and verifies `stop()` returns promptly.",
+      "confidence": "high"
+    }
+  ],
+  "fix_plan": [
+    "Implement `HubServer.runDebate()` and wire it to `DebateExecutor`, including persistence and lifecycle events.",
+    "Repair collaboration state handling after turn expiry so sessions return to a valid claimable state.",
+    "Relax or redesign turn-token enforcement so `request_rerun` remains reachable from `awaiting_resolution`.",
+    "Extend debate gating to every mutating collaboration MCP tool, especially `hub_claim_turn` and `hub_assign_agent`.",
+    "Fix shutdown filtering so `stop()` waits only for actively running sessions.",
+    "Update and expand tests for the Claude parser, turn expiry, resolution-stage reruns, debate gating, and shutdown behavior."
+  ],
+  "rerun_review": true
+}

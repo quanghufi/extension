@@ -24,6 +24,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { HubServer } from './server.js';
 import { Session } from './hub/session.js';
+import { isCollabTurnBased } from './hub/session-collab.js';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { registerCollabTools } from './mcp-collab-tools.js';
@@ -39,6 +40,53 @@ const STATES = /** @type {const} */ ({
     BUSY: 'busy',
     ERROR: 'error',
 });
+
+/**
+ * @param {string} text
+ * @returns {{ content: Array<{ type: 'text', text: string }>, isError: true }}
+ */
+function createMcpError(text) {
+    return {
+        content: [{ type: /** @type {const} */ ('text'), text }],
+        isError: /** @type {const} */ (true),
+    };
+}
+
+/**
+ * @param {string} text
+ * @returns {{ content: Array<{ type: 'text', text: string }> }}
+ */
+function createMcpResult(text) {
+    return {
+        content: [{ type: /** @type {const} */ ('text'), text }],
+    };
+}
+
+/**
+ * @param {import('./hub/session.js').Session} session
+ * @param {string} toolName
+ */
+function getLegacyToolBlock(session, toolName) {
+    if (!isCollabTurnBased(session.collabState)) {
+        return null;
+    }
+
+    /** @type {Record<string, string>} */
+    const guidanceByTool = {
+        hub_evaluate_findings: 'Use hub_post_message with type="finding_reply" instead.',
+        hub_rerun_review: 'Use hub_advance_session with action="request_rerun" instead.',
+    };
+
+    const guidance = guidanceByTool[toolName];
+    if (!guidance) {
+        return null;
+    }
+
+    return createMcpError(
+        `COLLAB_PATH_ACTIVE: ${toolName} is blocked while collaboration is active `
+        + `(collabState=${session.collabState}). ${guidance}`,
+    );
+}
 
 // ── Hub Manager (lazy init) ──────────────────────────
 
@@ -102,6 +150,24 @@ class HubManager {
     }
 
     /**
+     * Stop the underlying Hub server if it was started.
+     * Safe to call multiple times.
+     * @returns {Promise<void>}
+     */
+    async shutdown() {
+        this._startPromise = null;
+        this.state = STATES.IDLE;
+
+        if (!this._hub) {
+            return;
+        }
+
+        const hub = this._hub;
+        this._hub = null;
+        await hub.stop();
+    }
+
+    /**
      * Wait for a session to reach a terminal state.
      * Default 720s > adapter's 600s hardMs to allow clean completion.
      * Also checks for stalled sessions (watchdog) to fail fast.
@@ -162,7 +228,7 @@ function buildMcpServer() {
             });
             return {
                 content: [{
-                    type: 'text',
+                    type: /** @type {const} */ ('text'),
                     text: JSON.stringify({ sessions, total: sessions.length }, null, 2),
                 }],
             };
@@ -213,7 +279,7 @@ function buildMcpServer() {
                     hub.state = STATES.READY;
                     return {
                         content: [{
-                            type: 'text',
+                            type: /** @type {const} */ ('text'),
                             text: JSON.stringify({
                                 sessionId: completed.id,
                                 state: completed.state,
@@ -227,7 +293,7 @@ function buildMcpServer() {
                 hub.state = STATES.READY;
                 return {
                     content: [{
-                        type: 'text',
+                        type: /** @type {const} */ ('text'),
                         text: JSON.stringify({
                             sessionId: session.id,
                             state: session.state,
@@ -239,7 +305,7 @@ function buildMcpServer() {
                 hub.state = STATES.READY;
                 return {
                     content: [{
-                        type: 'text',
+                        type: /** @type {const} */ ('text'),
                         text: `Error: ${err instanceof Error ? err.message : String(err)}`,
                     }],
                     isError: true,
@@ -260,15 +326,12 @@ function buildMcpServer() {
             await hub.ensureReady();
             const session = hub.getSession(args.sessionId);
             if (!session) {
-                return {
-                    content: [{ type: 'text', text: `Session ${args.sessionId} not found` }],
-                    isError: true,
-                };
+                return createMcpError(`Session ${args.sessionId} not found`);
             }
 
             return {
                 content: [{
-                    type: 'text',
+                    type: /** @type {const} */ ('text'),
                     text: JSON.stringify({
                         ...session.toJSON(),
                         watchdog: session.getWatchdogStatus(),
@@ -278,6 +341,11 @@ function buildMcpServer() {
                         turn: { ...session.turn, token: undefined },
                         pendingAction: session.pendingAction,
                         messageCount: session.messages.length,
+                        // Debate fields
+                        debateState: session.debateState,
+                        debateRound: session.debateRound,
+                        debateAgents: session.debateAgents,
+                        debateActive: session.debateActive,
                     }, null, 2),
                 }],
             };
@@ -297,14 +365,14 @@ function buildMcpServer() {
             const session = hub.getSession(args.sessionId);
             if (!session) {
                 return {
-                    content: [{ type: 'text', text: `Session ${args.sessionId} not found` }],
+                    content: [{ type: /** @type {const} */ ('text'), text: `Session ${args.sessionId} not found` }],
                     isError: true,
                 };
             }
 
             return {
                 content: [{
-                    type: 'text',
+                    type: /** @type {const} */ ('text'),
                     text: JSON.stringify({
                         grouped: session.groupedFindings,
                         merged: session.mergedFindings,
@@ -336,10 +404,14 @@ function buildMcpServer() {
             const session = hub.getSession(args.sessionId);
             if (!session) {
                 return {
-                    content: [{ type: 'text', text: `Session ${args.sessionId} not found` }],
+                    content: [{ type: /** @type {const} */ ('text'), text: `Session ${args.sessionId} not found` }],
                     isError: true,
                 };
             }
+
+            // Collab path enforcement: block legacy evaluate when collab is active
+            const evalBlock = getLegacyToolBlock(session, "hub_evaluate_findings");
+            if (evalBlock) return evalBlock;
 
             try {
                 const rebuttals = args.evaluations.map((e) => ({
@@ -360,7 +432,7 @@ function buildMcpServer() {
 
                 return {
                     content: [{
-                        type: 'text',
+                        type: /** @type {const} */ ('text'),
                         text: JSON.stringify({
                             evaluated: rebuttals.length,
                             message: `${rebuttals.length} findings evaluated`,
@@ -368,13 +440,7 @@ function buildMcpServer() {
                     }],
                 };
             } catch (err) {
-                return {
-                    content: [{
-                        type: 'text',
-                        text: `Error: ${err instanceof Error ? err.message : String(err)}`,
-                    }],
-                    isError: true,
-                };
+                return createMcpError(`Error: ${err instanceof Error ? err.message : String(err)}`);
             }
         },
     );
@@ -393,10 +459,12 @@ function buildMcpServer() {
             const server = await hub.ensureReady();
             const session = hub.getSession(args.sessionId);
             if (!session) {
-                return {
-                    content: [{ type: 'text', text: `Session ${args.sessionId} not found` }],
-                    isError: true,
-                };
+                return createMcpError(`Session ${args.sessionId} not found`);
+            }
+
+            const blocked = getLegacyToolBlock(session, 'hub_rerun_review');
+            if (blocked) {
+                return blocked;
             }
 
             // Allow rerun for terminal states AND stalled sessions
@@ -405,13 +473,7 @@ function buildMcpServer() {
                 && session.getWatchdogStatus()?.stalled === true;
 
             if (!isTerminal && !isStalled) {
-                return {
-                    content: [{
-                        type: 'text',
-                        text: `Cannot rerun: session is still ${session.state}. Wait for completion or stall detection.`,
-                    }],
-                    isError: true,
-                };
+                return createMcpError(`Cannot rerun: session is still ${session.state}. Wait for completion or stall detection.`);
             }
 
             try {
@@ -430,7 +492,7 @@ function buildMcpServer() {
                     const completed = await hub.waitForCompletion(retry.id);
                     return {
                         content: [{
-                            type: 'text',
+                            type: /** @type {const} */ ('text'),
                             text: JSON.stringify({
                                 sessionId: completed.id,
                                 parentSessionId: args.sessionId,
@@ -443,7 +505,7 @@ function buildMcpServer() {
 
                 return {
                     content: [{
-                        type: 'text',
+                        type: /** @type {const} */ ('text'),
                         text: JSON.stringify({
                             sessionId: retry.id,
                             parentSessionId: args.sessionId,
@@ -453,13 +515,7 @@ function buildMcpServer() {
                     }],
                 };
             } catch (err) {
-                return {
-                    content: [{
-                        type: 'text',
-                        text: `Error: ${err instanceof Error ? err.message : String(err)}`,
-                    }],
-                    isError: true,
-                };
+                return createMcpError(`Error: ${err instanceof Error ? err.message : String(err)}`);
             }
         },
     );
@@ -474,7 +530,43 @@ function buildMcpServer() {
 // ── Main ─────────────────────────────────────────────
 
 async function main() {
-    const { mcpServer } = buildMcpServer();
+    const { mcpServer, hubManager } = buildMcpServer();
+
+    let shuttingDown = false;
+    const shutdown = async (/** @type {string} */ reason, exitCode = 0) => {
+        if (shuttingDown) {
+            return;
+        }
+
+        shuttingDown = true;
+        console.error(`[extension-hub MCP] Shutting down (${reason})`);
+
+        try {
+            await hubManager.shutdown();
+        } catch (err) {
+            console.error('[extension-hub MCP] Shutdown error:', err);
+            exitCode = 1;
+        }
+
+        process.exit(exitCode);
+    };
+
+    process.stdin.on('end', () => void shutdown('stdin_end'));
+    process.stdin.on('close', () => void shutdown('stdin_close'));
+    process.on('disconnect', () => void shutdown('disconnect'));
+
+    // Unhandled rejection handler
+    process.on('unhandledRejection', (reason, promise) => {
+        console.error('[extension-hub MCP] Unhandled Rejection:', reason);
+    });
+
+    process.on('SIGINT', () => void shutdown('SIGINT'));
+    process.on('SIGTERM', () => void shutdown('SIGTERM'));
+    process.on('SIGHUP', () => void shutdown('SIGHUP'));
+    if (process.platform === 'win32') {
+        process.on('SIGBREAK', () => void shutdown('SIGBREAK'));
+    }
+
     const transport = new StdioServerTransport();
     await mcpServer.connect(transport);
     console.error('[extension-hub MCP] Server started on stdio');
@@ -488,4 +580,4 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     });
 }
 
-export { buildMcpServer, HubManager, STATES };
+export { buildMcpServer, createMcpError, getLegacyToolBlock, HubManager, STATES };

@@ -23,7 +23,7 @@ import { HubServer } from '../src/server.js';
 import { Session } from '../src/hub/session.js';
 import { SnapshotManager } from '../src/snapshot/snapshot-manager.js';
 import { CodexAdapter } from '../src/adapters/codex-adapter.js';
-import { ClaudeAdapter } from '../src/adapters/claude-adapter.js';
+import { ClaudeCodeAdapter } from '../src/adapters/claude-code-adapter.js';
 import { createEvent } from '../src/schema/events.js';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
@@ -157,7 +157,7 @@ async function main() {
             adapters.push({ name: 'Codex', adapter: new CodexAdapter() });
         }
         if (!AGENT_FILTER || AGENT_FILTER === 'claude') {
-            adapters.push({ name: 'Claude', adapter: new ClaudeAdapter() });
+            adapters.push({ name: 'Claude', adapter: new ClaudeCodeAdapter() });
         }
 
         log.info(`Running ${adapters.length} adapter(s): ${adapters.map(a => a.name).join(', ')}`);

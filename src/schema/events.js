@@ -25,9 +25,16 @@ const COLLAB_EVENT_TYPES = /** @type {const} */ ([
 ]);
 
 /** @type {readonly string[]} */
+const DEBATE_EVENT_TYPES = /** @type {const} */ ([
+    'debate_started', 'debate_phase_changed', 'debate_agent_completed',
+    'debate_resolved', 'debate_failed',
+]);
+
+/** @type {readonly string[]} */
 const EVENT_TYPES = /** @type {const} */ ([
     'finding', 'status', 'error', 'heartbeat', 'raw_output',
     ...COLLAB_EVENT_TYPES,
+    ...DEBATE_EVENT_TYPES,
 ]);
 
 // ── Event Factory ────────────────────────────────────
@@ -194,4 +201,4 @@ export function computeDedupeKey({ file, line, summary }) {
  * @property {number} totalMs
  */
 
-export { SEVERITY_LEVELS, EVENT_TYPES, COLLAB_EVENT_TYPES };
+export { SEVERITY_LEVELS, EVENT_TYPES, COLLAB_EVENT_TYPES, DEBATE_EVENT_TYPES };

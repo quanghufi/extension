@@ -42,7 +42,6 @@ export class CodexAdapter extends BaseAdapter {
             args: [
                 'exec',
                 'review',
-                '--skip-git-repo-check',
                 '--json',
                 formatReviewPrompt(prompt),
             ],
@@ -90,7 +89,7 @@ export class CodexAdapter extends BaseAdapter {
                     fs.writeFileSync(targetPath, sourceBytes);
                 }
             } catch {
-                // Non-fatal — user auth/config may not exist yet.
+                // Non-fatal â€” user auth/config may not exist yet.
             }
         }
 

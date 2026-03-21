@@ -30,6 +30,29 @@ export const COLLAB_TERMINAL_STATES = /** @type {const} */ ([
     'closed',
 ]);
 
+/**
+ * Turn-based collab states where legacy tools (evaluate_findings, rerun_review)
+ * are blocked in favor of the collaboration-first path.
+ * @type {ReadonlySet<string>}
+ */
+export const COLLAB_TURN_BASED_STATES = Object.freeze(new Set([
+    'awaiting_codex_turn',
+    'codex_reviewing',
+    'awaiting_antigravity_turn',
+    'antigravity_reviewing',
+    'awaiting_resolution',
+]));
+
+/**
+ * Check whether a collabState is in the turn-based active set.
+ * When true, legacy tools should be blocked by the MCP server.
+ * @param {string} collabState
+ * @returns {boolean}
+ */
+export function isCollabTurnBased(collabState) {
+    return COLLAB_TURN_BASED_STATES.has(collabState);
+}
+
 /** @type {readonly string[]} */
 export const TURN_STATUS = /** @type {const} */ ([
     'idle',
@@ -46,6 +69,7 @@ export const ADVANCE_ACTIONS = /** @type {const} */ ([
     'close',
     'release_turn',
 ]);
+
 
 // ── Transition Table ─────────────────────────────────
 
@@ -147,7 +171,6 @@ export function waitingStateForAgent(agentId, assignments) {
     if (agentId === assignments.responder) return 'awaiting_antigravity_turn';
     throw new Error(`Agent "${agentId}" is not assigned as reviewer or responder`);
 }
-
 // ── Transition Validation ────────────────────────────
 
 /**

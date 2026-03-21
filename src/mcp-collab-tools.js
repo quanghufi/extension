@@ -14,6 +14,26 @@
 
 import { z } from 'zod';
 import { createEvent } from './schema/events.js';
+import { hasAdapter } from './adapters/adapter-registry.js';
+
+/**
+ * F-8: Block manual collab tools while debate is active.
+ * Returns error response if blocked, null if allowed.
+ * @param {import('./hub/session.js').Session} session
+ * @param {string} toolName
+ * @returns {{ content: Array<{ type: string, text: string }>, isError: true } | null}
+ */
+function getDebateGatingBlock(session, toolName) {
+    if (!session.debateActive) return null;
+    return {
+        content: [{
+            type: /** @type {const} */ ('text'),
+            text: `DEBATE_ACTIVE: ${toolName} is blocked while a debate is in progress `
+                + `(debateState=${session.debateState}). Wait for the debate to resolve.`,
+        }],
+        isError: true,
+    };
+}
 
 /**
  * @param {import('@modelcontextprotocol/sdk/server/mcp.js').McpServer} mcpServer
@@ -40,11 +60,15 @@ export function registerCollabTools(mcpServer, hub) {
                 const server = await hub.ensureReady();
                 const session = server.activeSessions.get(sessionId) ?? server.store.load(sessionId);
                 if (!session) {
-                    return { content: [{ type: 'text', text: `Session not found: ${sessionId}` }], isError: true };
+                    return { content: [{ type: /** @type {const} */ ('text'), text: `Session not found: ${sessionId}` }], isError: true };
                 }
 
                 const parsedFindingRefs = findingRefs ? JSON.parse(findingRefs) : [];
                 const parsedMetadata = metadata ? JSON.parse(metadata) : {};
+
+                // F-8: Block during active debate
+                const debateBlock = getDebateGatingBlock(session, 'hub_post_message');
+                if (debateBlock) return debateBlock;
 
                 const message = session.addMessage({
                     agentId,
@@ -70,7 +94,7 @@ export function registerCollabTools(mcpServer, hub) {
 
                 return {
                     content: [{
-                        type: 'text',
+                        type: /** @type {const} */ ('text'),
                         text: JSON.stringify({
                             message: { id: message.id, seq: message.seq, type: message.type },
                             collabState: session.collabState,
@@ -78,7 +102,7 @@ export function registerCollabTools(mcpServer, hub) {
                     }],
                 };
             } catch (err) {
-                return { content: [{ type: 'text', text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+                return { content: [{ type: /** @type {const} */ ('text'), text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
             }
         }
     );
@@ -99,7 +123,7 @@ export function registerCollabTools(mcpServer, hub) {
                 const server = await hub.ensureReady();
                 const session = server.activeSessions.get(sessionId) ?? server.store.load(sessionId);
                 if (!session) {
-                    return { content: [{ type: 'text', text: `Session not found: ${sessionId}` }], isError: true };
+                    return { content: [{ type: /** @type {const} */ ('text'), text: `Session not found: ${sessionId}` }], isError: true };
                 }
 
                 const parsedTypes = types ? types.split(',').map(t => t.trim()) : undefined;
@@ -110,7 +134,7 @@ export function registerCollabTools(mcpServer, hub) {
 
                 return {
                     content: [{
-                        type: 'text',
+                        type: /** @type {const} */ ('text'),
                         text: JSON.stringify({
                             messages: redacted,
                             total: session.messages.length,
@@ -121,7 +145,7 @@ export function registerCollabTools(mcpServer, hub) {
                     }],
                 };
             } catch (err) {
-                return { content: [{ type: 'text', text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+                return { content: [{ type: /** @type {const} */ ('text'), text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
             }
         }
     );
@@ -140,8 +164,12 @@ export function registerCollabTools(mcpServer, hub) {
                 const server = await hub.ensureReady();
                 const session = server.activeSessions.get(sessionId) ?? server.store.load(sessionId);
                 if (!session) {
-                    return { content: [{ type: 'text', text: `Session not found: ${sessionId}` }], isError: true };
+                    return { content: [{ type: /** @type {const} */ ('text'), text: `Session not found: ${sessionId}` }], isError: true };
                 }
+
+                // Fix #5: Block manual turn claims during active debates
+                const debateBlock = getDebateGatingBlock(session, 'hub_claim_turn');
+                if (debateBlock) return debateBlock;
 
                 const previousState = session.collabState;
                 const { token } = session.claimTurn(agentId, ttlSeconds ?? 600);
@@ -167,7 +195,7 @@ export function registerCollabTools(mcpServer, hub) {
 
                 return {
                     content: [{
-                        type: 'text',
+                        type: /** @type {const} */ ('text'),
                         text: JSON.stringify({
                             token,
                             collabState: session.collabState,
@@ -176,7 +204,7 @@ export function registerCollabTools(mcpServer, hub) {
                     }],
                 };
             } catch (err) {
-                return { content: [{ type: 'text', text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+                return { content: [{ type: /** @type {const} */ ('text'), text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
             }
         }
     );
@@ -195,8 +223,12 @@ export function registerCollabTools(mcpServer, hub) {
                 const server = await hub.ensureReady();
                 const session = server.activeSessions.get(sessionId) ?? server.store.load(sessionId);
                 if (!session) {
-                    return { content: [{ type: 'text', text: `Session not found: ${sessionId}` }], isError: true };
+                    return { content: [{ type: /** @type {const} */ ('text'), text: `Session not found: ${sessionId}` }], isError: true };
                 }
+
+                // Fix #5: Block manual agent assignment during active debates
+                const debateBlock2 = getDebateGatingBlock(session, 'hub_assign_agent');
+                if (debateBlock2) return debateBlock2;
 
                 const previousState = session.collabState;
                 session.assignAgent(role, agentId);
@@ -224,7 +256,7 @@ export function registerCollabTools(mcpServer, hub) {
 
                 return {
                     content: [{
-                        type: 'text',
+                        type: /** @type {const} */ ('text'),
                         text: JSON.stringify({
                             assignments: session.assignments,
                             collabState: session.collabState,
@@ -232,7 +264,7 @@ export function registerCollabTools(mcpServer, hub) {
                     }],
                 };
             } catch (err) {
-                return { content: [{ type: 'text', text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+                return { content: [{ type: /** @type {const} */ ('text'), text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
             }
         }
     );
@@ -246,17 +278,26 @@ export function registerCollabTools(mcpServer, hub) {
             agentId: z.string().describe('Agent performing the action'),
             action: z.enum(['review_complete', 'request_response', 'request_rerun', 'resolve', 'close', 'release_turn']).describe('Advance action'),
             payload: z.string().optional().describe('JSON object of action-specific payload'),
+            turnToken: z.string().optional().describe('Required for release_turn; token of the agent currently holding the turn'),
         },
-        async ({ sessionId, agentId, action, payload }) => {
+        async ({ sessionId, agentId, action, payload, turnToken }) => {
             try {
                 const server = await hub.ensureReady();
                 const session = server.activeSessions.get(sessionId) ?? server.store.load(sessionId);
                 if (!session) {
-                    return { content: [{ type: 'text', text: `Session not found: ${sessionId}` }], isError: true };
+                    return { content: [{ type: /** @type {const} */ ('text'), text: `Session not found: ${sessionId}` }], isError: true };
                 }
 
                 const parsedPayload = payload ? JSON.parse(payload) : undefined;
-                const result = session.advanceCollabState(action, agentId, { payload: parsedPayload });
+
+                // F-8: Block during active debate
+                const debateBlock = getDebateGatingBlock(session, 'hub_advance_session');
+                if (debateBlock) return debateBlock;
+
+                const result = session.advanceCollabState(action, agentId, {
+                    payload: parsedPayload,
+                    turnToken,
+                });
 
                 // Emit collab_state_changed
                 const stateEvent = createEvent(sessionId, agentId, 'collab_state_changed', {
@@ -288,7 +329,7 @@ export function registerCollabTools(mcpServer, hub) {
 
                 return {
                     content: [{
-                        type: 'text',
+                        type: /** @type {const} */ ('text'),
                         text: JSON.stringify({
                             action,
                             previousState: result.previousState,
@@ -300,7 +341,113 @@ export function registerCollabTools(mcpServer, hub) {
                     }],
                 };
             } catch (err) {
-                return { content: [{ type: 'text', text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+                return { content: [{ type: /** @type {const} */ ('text'), text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+            }
+        }
+    );
+
+    // ── hub_start_debate ─────────────────────────────
+    mcpServer.tool(
+        'hub_start_debate',
+        'Start an automated multi-round debate between AI agents on an existing review session',
+        {
+            sessionId: z.string().describe('Session UUID — must be a completed review session'),
+            agents: z.array(z.string()).min(1).max(2).describe('Agent IDs to debate (1-2 agents, e.g. ["codex"] or ["codex", "claude-code"])'),
+            maxRounds: z.number().optional().describe('Maximum debate rounds (default: 3)'),
+            decider: z.string().optional().describe('Decider agent ID for tie-breaks (required if 2 agents)'),
+            consensusThreshold: z.number().optional().describe('Agreement threshold 0.0-1.0 (default: 0.7)'),
+        },
+        async ({ sessionId, agents, maxRounds, decider, consensusThreshold }) => {
+            try {
+                const server = await hub.ensureReady();
+                const session = server.activeSessions.get(sessionId) ?? server.store.load(sessionId);
+                if (!session) {
+                    return { content: [{ type: /** @type {const} */ ('text'), text: `Session not found: ${sessionId}` }], isError: true };
+                }
+
+                // Block if debate already active
+                if (session.debateActive) {
+                    return {
+                        content: [{
+                            type: /** @type {const} */ ('text'),
+                            text: `Debate already active on session ${sessionId} (state: ${session.debateState})`,
+                        }],
+                        isError: true,
+                    };
+                }
+
+                if (session.state !== 'completed') {
+                    return {
+                        content: [{
+                            type: /** @type {const} */ ('text'),
+                            text: `hub_start_debate requires a completed review session, got state "${session.state}"`,
+                        }],
+                        isError: true,
+                    };
+                }
+
+                // Validate debate config synchronously before scheduling
+                if (!agents || agents.length === 0 || agents.length > 2) {
+                    return {
+                        content: [{
+                            type: /** @type {const} */ ('text'),
+                            text: `Debate requires 1-2 agents, got ${agents?.length ?? 0}`,
+                        }],
+                        isError: true,
+                    };
+                }
+                if (agents.length === 2 && !decider) {
+                    return {
+                        content: [{
+                            type: /** @type {const} */ ('text'),
+                            text: 'Decider is required for 2-agent debates',
+                        }],
+                        isError: true,
+                    };
+                }
+
+                // Validate all agent adapters exist before scheduling
+                const allAgentIds = [...agents, ...(decider ? [decider] : [])];
+                const uniqueIds = [...new Set(allAgentIds)];
+                for (const id of uniqueIds) {
+                    if (!hasAdapter(id)) {
+                        return {
+                            content: [{
+                                type: /** @type {const} */ ('text'),
+                                text: `Unknown agent adapter: "${id}". No adapter registered for this agent ID.`,
+                            }],
+                            isError: true,
+                        };
+                    }
+                }
+
+                server.runDebate(sessionId, {
+                    agents,
+                    maxRounds: maxRounds ?? 3,
+                    decider: decider ?? undefined,
+                    consensusThreshold: consensusThreshold ?? 0.7,
+                }).catch((err) => {
+                    console.error(`[MCP] runDebate error for ${sessionId}:`, err);
+                });
+
+                return {
+                    content: [{
+                        type: /** @type {const} */ ('text'),
+                        text: JSON.stringify({
+                            sessionId,
+                            debateState: session.debateState,
+                            debateRound: session.debateRound,
+                            debateActive: true,
+                            agents,
+                            maxRounds: maxRounds ?? 3,
+                            decider: decider ?? null,
+                            consensusThreshold: consensusThreshold ?? 0.7,
+                            message: 'Debate started in background. Use hub_get_status to watch progress.',
+                        }, null, 2),
+                    }],
+                };
+            } catch (err) {
+                return { content: [{ type: /** @type {const} */ ('text'), text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
             }
         }
     );

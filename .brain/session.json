@@ -1,93 +1,87 @@
 {
-  "updated_at": "2026-03-12T07:11:00+07:00",
+  "updated_at": "2026-03-20T22:08:00+07:00",
   "working_on": {
-    "feature": "Packaging v1.0.0 — Global npm install",
-    "task": "Packaged extension-hub as global npm package. CLI entry, package.json, .npmignore, README, USER-GUIDE.md. Pushed to GitHub.",
-    "status": "done",
+    "feature": "Debate Findings Fix",
+    "task": "All 7 actionable debate findings fixed (P0-P3). E2E dry-run verified.",
+    "status": "completed",
     "files": [
-      "bin/extension-hub.js",
-      "package.json",
-      ".npmignore",
-      "README.md",
-      "docs/USER-GUIDE.md",
-      ".agents/workflows/antigravity-hub-contract.md",
-      ".gitignore"
+      "src/server.js",
+      "src/mcp-collab-tools.js",
+      "src/collab-routes.js",
+      "src/hub/session.js",
+      "scripts/e2e-test.js"
     ],
     "blockers": [],
-    "notes": "Install anywhere: npm install -g github:quanghufi/extension"
+    "notes": "F-597F73D3 (dead timeout profiles) deferred as low-risk. All other findings verified."
   },
   "pending_tasks": [
     {
-      "task": "Implement Phase 05: Resilient Sessions",
-      "priority": "high",
-      "notes": "Cancel, retry, reconnect flows. Plan at plans/260308-1959-phase2-polish/phase-05-resilient-sessions.md"
-    },
-    {
-      "task": "Implement Phase 04: Code Annotation Viewer",
-      "priority": "high",
-      "notes": "Plan reviewed through Codex rounds. Key: file API, syntax highlighting, XSS safety, IDE links."
-    },
-    {
-      "task": "Fix remaining lint errors in session.js",
+      "task": "F-597F73D3: Clean up dead timeout profiles",
       "priority": "low",
-      "notes": "Pre-existing: _groupFindings {} type errors, fromJSON null/undefined mismatches. Not blocking."
+      "notes": "Deferred — unused code, harmless but messy"
+    },
+    {
+      "task": "Phase 04: Code Annotation Viewer",
+      "priority": "low",
+      "notes": "Deferred"
+    },
+    {
+      "task": "Phase 05: Resilient Sessions",
+      "priority": "low",
+      "notes": "Deferred"
     }
   ],
   "recent_changes": [
     {
-      "timestamp": "2026-03-11T21:00:00+07:00",
+      "timestamp": "2026-03-20T22:00:00+07:00",
       "type": "bugfix",
-      "description": "Phase 4 review: Fixed XSS in index.html (escapeHtml), separated 400/500 error codes in api-routes.js, validated NaN after param",
+      "description": "Fixed 7 debate findings: debate_failed→failed (P0), activeSessions memory leak (P0), adapter validation (P1), turnToken passthrough (P1), REST debate gating (P2), expire state recovery (P2), shutdown wait for debates (P3)",
       "files": [
-        "src/api-routes.js",
-        "src/ui/index.html"
+        "src/server.js",
+        "src/mcp-collab-tools.js",
+        "src/collab-routes.js",
+        "src/hub/session.js"
       ]
     },
     {
-      "timestamp": "2026-03-11T21:30:00+07:00",
+      "timestamp": "2026-03-20T21:30:00+07:00",
       "type": "bugfix",
-      "description": "Phase 5 review (5 rounds): Fixed 8 bugs in server.js — session save after finalize, start() reject on bind error, catch terminal status event, path traversal bypass, reviewOptions guard for MCP-only, bind 127.0.0.1, isFile check, removeListener instead of removeAllListeners",
+      "description": "Fixed stale import in e2e-test.js: ClaudeAdapter→ClaudeCodeAdapter, claude-adapter.js→claude-code-adapter.js",
       "files": [
-        "src/server.js"
+        "scripts/e2e-test.js"
       ]
     },
     {
-      "timestamp": "2026-03-11T21:48:00+07:00",
-      "type": "feature",
-      "description": "Added Step 3.1 cleanup to codex-review-loop workflow: delete all session data after tổng kết",
-      "files": [
-        ".agents/workflows/codex-review-loop.md"
-      ]
+      "timestamp": "2026-03-20T20:00:00+07:00",
+      "type": "review",
+      "description": "Ran debate analysis on extension-hub codebase. 8 findings identified (2 P0, 2 P1, 2 P2, 2 P3)",
+      "files": []
     }
   ],
   "errors_encountered": [
     {
-      "error": "Codex MCP adapter stalls (3 consecutive times)",
-      "context": "Creating review sessions via Hub API, Codex process never completes. watchdog.stalled=true",
-      "solution": "Restart Hub server (node src/server.js). Fresh restart resolves the stall.",
+      "error": "e2e-test.js MODULE_NOT_FOUND: claude-adapter.js",
+      "solution": "File was renamed to claude-code-adapter.js with class ClaudeCodeAdapter. Updated both import path and class name.",
+      "resolved": true
+    },
+    {
+      "error": "server.js runDebate sets invalid state 'debate_failed'",
+      "solution": "debate-state.js only has: idle/reviewing/evaluating/debating/done/failed. Changed to 'failed'.",
       "resolved": true
     }
   ],
   "decisions_made": [
     {
-      "decision": "Bind server to 127.0.0.1 instead of 0.0.0.0",
-      "reason": "Codex Round 3 finding — no reason to expose unauthenticated Hub API on LAN"
+      "decision": "Fix all P0+P1 findings immediately, P2+P3 in same session",
+      "reason": "P0 bugs could cause data corruption (wrong state) and memory leaks. P1 bugs caused silent failures."
     },
     {
-      "decision": "Guard reviewOptions with agentId.startsWith('mcp-')",
-      "reason": "Legacy codex adapter still registered, expects string prompt. Only MCP adapters handle structured reviewOptions."
+      "decision": "Defer F-597F73D3 (dead timeout profiles)",
+      "reason": "Unused profiles exist but don't affect runtime. Low risk, can be cleaned in future refactor."
     },
     {
-      "decision": "Reject CORS wildcard finding as standard for localhost dev tools",
-      "reason": "vite, webpack-dev-server all use Access-Control-Allow-Origin:*. Rebuttal won — Codex withdrew."
-    },
-    {
-      "decision": "Reject static file stream TOCTOU as purely theoretical",
-      "reason": "Localhost dashboard serves 2-3 immutable files. Rejected 3 times, Codex withdrew 3 times."
-    },
-    {
-      "decision": "Add session cleanup step to codex-review-loop workflow",
-      "reason": "After 5-round review, session data accumulates. Step 3.1 ensures clean Hub data."
+      "decision": "blockIfDebateActive on REST routes mirrors MCP gating",
+      "reason": "REST routes were unprotected while MCP tools had getDebateGatingBlock. Same protection needed for both paths."
     }
   ]
 }

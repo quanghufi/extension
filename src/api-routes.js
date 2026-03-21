@@ -42,6 +42,7 @@ export async function apiCreateSession(server, req, res) {
     }
 
     try {
+        const shouldAutoStart = data.autoStart !== false;
         const session = new Session({
             projectDir: data.projectDir ?? process.cwd(),
             prompt: data.prompt ?? 'Review this code for bugs and issues',
@@ -55,9 +56,11 @@ export async function apiCreateSession(server, req, res) {
         server.store.save(session);
         jsonResponse(res, 201, { session: session.toJSON() });
 
-        server.runSession(session.id).catch(err => {
-            console.error(`[FATAL] Unhandled error in runSession for ${session.id}:`, err);
-        });
+        if (shouldAutoStart) {
+            server.runSession(session.id).catch(err => {
+                console.error(`[FATAL] Unhandled error in runSession for ${session.id}:`, err);
+            });
+        }
     } catch (err) {
         console.error('[ERROR] apiCreateSession internal failure:', err);
         jsonResponse(res, 500, { error: 'Internal server error' });

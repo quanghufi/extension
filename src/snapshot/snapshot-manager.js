@@ -13,9 +13,9 @@
  * @module snapshot/snapshot-manager
  */
 
-import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import spawn from 'cross-spawn';
 import { v4 as uuidv4 } from 'uuid';
 
 // ── Constants ────────────────────────────────────────
@@ -116,7 +116,7 @@ export class SnapshotManager {
 
         // Clean up git worktree metadata if this was a worktree-based snapshot
         try {
-            execSync(`git worktree remove --force "${resolved}"`, { stdio: 'pipe' });
+            runCommand('git', ['worktree', 'remove', '--force', resolved]);
         } catch {
             // Not a git worktree or git not available — fall through to rmSync
         }
@@ -168,9 +168,8 @@ export class SnapshotManager {
      */
     _isGitRepo(sourceDir) {
         try {
-            execSync('git rev-parse --is-inside-work-tree', {
+            runCommand('git', ['rev-parse', '--is-inside-work-tree'], {
                 cwd: sourceDir,
-                stdio: 'pipe',
             });
             return true;
         } catch {
@@ -183,9 +182,8 @@ export class SnapshotManager {
      * @param {string} snapshotPath
      */
     _createGitWorktree(sourceDir, snapshotPath) {
-        execSync(`git worktree add --detach "${snapshotPath}"`, {
+        runCommand('git', ['worktree', 'add', '--detach', snapshotPath], {
             cwd: sourceDir,
-            stdio: 'pipe',
         });
     }
 
@@ -196,23 +194,22 @@ export class SnapshotManager {
     _createCopy(sourceDir, snapshotPath) {
         if (IS_WINDOWS) {
             // robocopy /MIR excludes .git and node_modules for speed
-            const excludeDirs = '.git node_modules .next dist build';
-            try {
-                execSync(
-                    `robocopy "${sourceDir}" "${snapshotPath}" /MIR /XD ${excludeDirs} /NFL /NDL /NJH /NJS /NC /NS /NP`,
-                    { stdio: 'pipe' }
-                );
-            } catch (err) {
-                // robocopy returns non-zero exit codes for various success states
-                // Exit code < 8 means success (0-7 are various copy results)
-                const exitCode = /** @type {any} */ (err).status;
-                if (exitCode >= 8) throw err;
-            }
-        } else {
-            execSync(
-                `cp -r "${sourceDir}" "${snapshotPath}" && rm -rf "${snapshotPath}/.git" "${snapshotPath}/node_modules"`,
-                { stdio: 'pipe' }
+            const excludeDirs = ['.git', 'node_modules', '.next', 'dist', 'build'];
+            runCommand(
+                'robocopy',
+                [sourceDir, snapshotPath, '/MIR', '/XD', ...excludeDirs, '/NFL', '/NDL', '/NJH', '/NJS', '/NC', '/NS', '/NP'],
+                { acceptedExitCodes: [0, 1, 2, 3, 4, 5, 6, 7] },
             );
+        } else {
+            fs.cpSync(sourceDir, snapshotPath, {
+                recursive: true,
+                force: true,
+                verbatimSymlinks: true,
+                filter: (src) => {
+                    const basename = path.basename(src);
+                    return basename !== '.git' && basename !== 'node_modules';
+                },
+            });
         }
     }
 
@@ -227,18 +224,15 @@ export class SnapshotManager {
     _applyWindowsProtection(snapshotPath) {
         try {
             // Layer 1: Mark all files and directories as read-only
-            execSync(`attrib +R /S /D "${snapshotPath}\\*"`, { stdio: 'pipe' });
-            execSync(`attrib +R "${snapshotPath}"`, { stdio: 'pipe' });
+            runCommand('attrib', ['+R', '/S', '/D', `${snapshotPath}\\*`]);
+            runCommand('attrib', ['+R', snapshotPath]);
         } catch {
             // attrib may partially fail, continue to icacls
         }
 
         try {
             // Layer 2: Deny write/delete via ACL
-            execSync(
-                `icacls "${snapshotPath}" /deny Everyone:(W,D) /T /C /Q`,
-                { stdio: 'pipe' }
-            );
+            runCommand('icacls', [snapshotPath, '/deny', 'Everyone:(W,D)', '/T', '/C', '/Q']);
         } catch {
             // icacls may fail in some environments (non-admin, containers)
         }
@@ -251,16 +245,13 @@ export class SnapshotManager {
     _removeWindowsProtection(snapshotPath) {
         try {
             // Remove ACL deny first
-            execSync(
-                `icacls "${snapshotPath}" /remove:d Everyone /T /C /Q`,
-                { stdio: 'pipe' }
-            );
+            runCommand('icacls', [snapshotPath, '/remove:d', 'Everyone', '/T', '/C', '/Q']);
         } catch { /* may not have been applied */ }
 
         try {
             // Remove read-only attributes
-            execSync(`attrib -R /S /D "${snapshotPath}\\*"`, { stdio: 'pipe' });
-            execSync(`attrib -R "${snapshotPath}"`, { stdio: 'pipe' });
+            runCommand('attrib', ['-R', '/S', '/D', `${snapshotPath}\\*`]);
+            runCommand('attrib', ['-R', snapshotPath]);
         } catch { /* best effort */ }
     }
 
@@ -270,7 +261,7 @@ export class SnapshotManager {
      */
     _applyPosixProtection(snapshotPath) {
         try {
-            execSync(`chmod -R a-w "${snapshotPath}"`, { stdio: 'pipe' });
+            runCommand('chmod', ['-R', 'a-w', snapshotPath]);
         } catch { /* best effort */ }
     }
 
@@ -280,9 +271,40 @@ export class SnapshotManager {
      */
     _removePosixProtection(snapshotPath) {
         try {
-            execSync(`chmod -R u+w "${snapshotPath}"`, { stdio: 'pipe' });
+            runCommand('chmod', ['-R', 'u+w', snapshotPath]);
         } catch { /* best effort */ }
     }
+}
+
+/**
+ * @param {string} command
+ * @param {string[]} args
+ * @param {{ cwd?: string, acceptedExitCodes?: number[] }} [options]
+ */
+function runCommand(command, args, options = {}) {
+    const result = spawn.sync(command, args, {
+        cwd: options.cwd,
+        stdio: 'pipe',
+        shell: false,
+        encoding: 'utf8',
+    });
+
+    if (result.error) {
+        throw result.error;
+    }
+
+    const exitCode = result.status ?? 0;
+    const acceptedExitCodes = options.acceptedExitCodes ?? [0];
+    if (!acceptedExitCodes.includes(exitCode)) {
+        const stderr = result.stderr?.trim();
+        const stdout = result.stdout?.trim();
+        throw new Error(
+            `${command} exited with code ${exitCode}`
+            + (stderr ? `: ${stderr}` : stdout ? `: ${stdout}` : '')
+        );
+    }
+
+    return result;
 }
 
 // ── Types ────────────────────────────────────────────

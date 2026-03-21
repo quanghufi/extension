@@ -79,6 +79,19 @@ export class Session {
         this.turn = createDefaultTurn();
         /** @type {{ type: string, [key: string]: unknown }|null} */
         this.pendingAction = null;
+
+        // ── Debate Layer ────────────────────────────────
+        /** @type {string|null} */
+        this.debateState = null;
+        this.debateRound = 0;
+        this.debateMaxRounds = 3;
+        /** @type {string[]|null} */
+        this.debateAgents = null;
+        this.debateActive = false;
+        /** @type {Record<string, Record<string, any[]>>} */
+        this.debateRoundEvals = {};
+        /** @type {Array<{ agentId: string, phase: string, startedAt: number, completedAt: number|null, timedOut: boolean }>} */
+        this.debateTimings = [];
     }
 
     /**
@@ -319,7 +332,7 @@ export class Session {
     /**
      * @param {string} action
      * @param {string} agentId
-     * @param {{ payload?: Record<string, unknown> }} [options]
+     * @param {{ payload?: Record<string, unknown>, turnToken?: string }} [options]
      * @returns {{ previousState: string, nextState: string, pendingAction?: { type: string, [key: string]: unknown } }}
      */
     advanceCollabState(action, agentId, options = {}) {
@@ -336,6 +349,12 @@ export class Session {
 
         if (!validation.valid) {
             throw new Error(validation.reason);
+        }
+
+        // Enforce turn ownership for all turn-sensitive actions
+        const TURN_REQUIRED_ACTIONS = ['release_turn', 'review_complete', 'request_response'];
+        if (TURN_REQUIRED_ACTIONS.includes(action)) {
+            this.ensureTurnOwner(agentId, options.turnToken ?? '');
         }
 
         const previousState = this.collabState;
@@ -364,7 +383,16 @@ export class Session {
             return;
         }
         if (now >= new Date(this.turn.claimExpiresAt)) {
+            const ownerId = this.turn.ownerId;
             this.turn.status = 'expired';
+
+            // Recover to the correct waiting state for the previous owner,
+            // so the same agent (or another) can re-claim without manual reassignment.
+            if (ownerId) {
+                this.collabState = waitingStateForAgent(ownerId, this.assignments);
+            } else {
+                this.collabState = 'awaiting_assignment';
+            }
         }
     }
 
@@ -458,6 +486,11 @@ export class Session {
             collabState: this.collabState,
             messageCount: this.messages.length,
             assignments: this.assignments,
+            // Debate fields (F-10)
+            debateState: this.debateState,
+            debateRound: this.debateRound,
+            debateAgents: this.debateAgents,
+            debateActive: this.debateActive,
         };
     }
 

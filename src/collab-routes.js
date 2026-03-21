@@ -11,6 +11,21 @@ import { jsonResponse, readBody } from './http-utils.js';
 import { createEvent } from './schema/events.js';
 
 /**
+ * Block REST collab routes during active debate.
+ * Returns true (and sends 409) if blocked, false if allowed.
+ * @param {import('./hub/session.js').Session} session
+ * @param {import('http').ServerResponse} res
+ * @returns {boolean}
+ */
+function blockIfDebateActive(session, res) {
+    if (!session.debateActive) return false;
+    jsonResponse(res, 409, {
+        error: `DEBATE_ACTIVE: This endpoint is blocked while a debate is in progress (debateState=${session.debateState}).`,
+    });
+    return true;
+}
+
+/**
  * GET /api/sessions/:id/messages
  * @param {import('./server.js').HubServer} server
  * @param {string} id
@@ -58,6 +73,8 @@ export async function apiPostMessage(server, id, req, res) {
         return jsonResponse(res, 404, { error: 'Session not found' });
     }
 
+    if (blockIfDebateActive(session, res)) return;
+
     try {
         const body = await readBody(req);
         const data = JSON.parse(body || '{}');
@@ -103,6 +120,8 @@ export async function apiClaimTurn(server, id, req, res) {
         return jsonResponse(res, 404, { error: 'Session not found' });
     }
 
+    if (blockIfDebateActive(session, res)) return;
+
     try {
         const body = await readBody(req);
         const data = JSON.parse(body || '{}');
@@ -145,6 +164,8 @@ export async function apiAssignAgent(server, id, req, res) {
     if (!session) {
         return jsonResponse(res, 404, { error: 'Session not found' });
     }
+
+    if (blockIfDebateActive(session, res)) return;
 
     try {
         const body = await readBody(req);
@@ -189,11 +210,16 @@ export async function apiAdvanceSession(server, id, req, res) {
         return jsonResponse(res, 404, { error: 'Session not found' });
     }
 
+    if (blockIfDebateActive(session, res)) return;
+
     try {
         const body = await readBody(req);
         const data = JSON.parse(body || '{}');
 
-        const result = session.advanceCollabState(data.action, data.agentId, { payload: data.payload });
+        const result = session.advanceCollabState(data.action, data.agentId, {
+            payload: data.payload,
+            turnToken: data.turnToken,
+        });
 
         const stateEvent = createEvent(id, data.agentId, 'collab_state_changed', {
             action: data.action, from: result.previousState, to: result.nextState,

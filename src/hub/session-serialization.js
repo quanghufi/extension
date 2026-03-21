@@ -39,6 +39,14 @@ export function serializeSession(session) {
         assignments: session.assignments,
         turn: session.turn,
         pendingAction: session.pendingAction,
+        // Debate layer
+        debateState: session.debateState,
+        debateRound: session.debateRound,
+        debateMaxRounds: session.debateMaxRounds,
+        debateAgents: session.debateAgents,
+        debateActive: session.debateActive,
+        debateRoundEvals: session.debateRoundEvals,
+        debateTimings: session.debateTimings,
     };
 }
 
@@ -92,4 +100,13 @@ export function hydrateSession(session, data) {
     session.pendingAction = /** @type {{ type: string, [key: string]: unknown }|null} */ (
         data.pendingAction ?? null
     );
+
+    // Debate layer — safe defaults for old sessions
+    session.debateState = /** @type {string|null} */ (data.debateState ?? null);
+    session.debateRound = /** @type {number} */ (data.debateRound ?? 0);
+    session.debateMaxRounds = /** @type {number} */ (data.debateMaxRounds ?? 3);
+    session.debateAgents = /** @type {string[]|null} */ (data.debateAgents ?? null);
+    session.debateActive = /** @type {boolean} */ (data.debateActive ?? false);
+    session.debateRoundEvals = /** @type {Record<string, Record<string, any[]>>} */ (data.debateRoundEvals ?? {});
+    session.debateTimings = /** @type {Array<any>} */ (data.debateTimings ?? []);
 }

@@ -1,0 +1,23 @@
+import { HubServer } from './src/server.js';
+import { Session } from './src/hub/session.js';
+import { getAdapter, registerAdapter } from './src/adapters/adapter-registry.js';
+
+const server = new HubServer({ port: 0, dataDir: `./tmp/debug-${Date.now()}`, snapshotDir: `./tmp/debug-snap-${Date.now()}` });
+await server.start();
+console.log('started');
+const originalCodex = getAdapter('codex');
+const originalClaude = getAdapter('claude-code');
+registerAdapter({ agentId: 'codex', buildCommand: () => ({ cmd: 'fake', args: [] }), parseChunk: async function* () {}, parseResult: () => [], execute: () => ({ stream: (async function* () {})(), done: Promise.resolve({ status: 'ok', findings: [{ id:'F1', severity:'high', summary:'Shared debate finding', evidence:'', file:'src/debate.js', line:12, confidence:0.9, dedupe_key:'debate-shared-finding', fix_instructions:null, why_it_matters:null }], timingMs:{ firstByteMs:0,lastIdleGapMs:0,totalMs:0 } }) }) }, { replace: true });
+registerAdapter({ agentId: 'claude-code', buildCommand: () => ({ cmd: 'fake', args: [] }), parseChunk: async function* () {}, parseResult: () => [], execute: (_sid,_dir,prompt) => ({ stream: (async function* () {})(), done: Promise.resolve({ status: 'ok', findings: String(prompt).includes('Debate round 1') ? [{ id:'F2', severity:'high', summary:'Shared debate finding', evidence:'', file:'src/debate.js', line:12, confidence:0.85, dedupe_key:'debate-shared-finding', fix_instructions:null, why_it_matters:null }] : [], timingMs:{ firstByteMs:0,lastIdleGapMs:0,totalMs:0 } }) }) }, { replace: true });
+const session = new Session({ projectDir:'/debate-project', prompt:'Review this project', agentId:'codex' });
+session.start();
+session.finalize('completed', []);
+server.store.save(session);
+console.log('before run');
+const result = await server.runDebate(session.id, { agents:['codex','claude-code'], maxRounds:2, decider:'codex', consensusThreshold:1.0 });
+console.log('after run', result.logicalFindings.length, result.finalFindings.length);
+const stored = server.store.load(session.id);
+console.log('stored', stored.debateState, stored.debateRound, stored.allFindings.length);
+registerAdapter(originalCodex, { replace: true });
+registerAdapter(originalClaude, { replace: true });
+await server.stop();

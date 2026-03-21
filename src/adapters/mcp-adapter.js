@@ -341,6 +341,8 @@ export class McpCodexAdapter {
                         if (streamDone) {
                             return Promise.resolve(/** @type {IteratorResult<import('../schema/events.js').Event>} */({ value: /** @type {any} */ (undefined), done: true }));
                         }
+                        // Wait for next event — real timeout is managed by 3-tier timeout
+                        // in adapter-execution.js (firstByte/idle/hard), not here.
                         return new Promise((resolve) => {
                             pendingResolve = () => {
                                 const next = eventQueue.shift();

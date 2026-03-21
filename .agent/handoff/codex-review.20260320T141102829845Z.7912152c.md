@@ -1,0 +1,70 @@
+# Codex Review
+
+## Overview
+- Status: has_findings
+- Summary: 9 material issues in the current change set: one hard failure path in the MCP adapter stream, two session-lifecycle regressions, two collaboration authorization/state bugs, and four debate/Claude adapter correctness gaps.
+- Findings: 9
+
+## Key Findings
+
+### 1. [HIGH] The new MCP stream iterator self-times out after 60s of silence and turns healthy reviews into failures
+- Location: src/adapters/mcp-adapter.js:345
+- Why it matters: `mcp-codex` reviews can legitimately be quiet for longer than 60 seconds while the Python side is working. The added `Promise.race()` rejects the async iterator, which bubbles out of `for await` in `runSession()` and marks the session failed even if `done` would later resolve successfully.
+- Recommended fix: Remove the iterator-level 60s rejection path, or tie it to the adapter's real timeout policy instead of raw stream silence. The stream should wait until `enqueue()` or `endStream()` fires. Add a regression test where `done` resolves after >60s with no intermediate events and confirm `runSession()` still completes successfully.
+- Confidence: high
+
+### 2. [HIGH] Most collab state transitions still do not require turn ownership
+- Location: src/hub/session.js:354
+- Why it matters: The change only enforces `turnToken` for `release_turn`. `review_complete`, `request_response`, and `request_rerun` can still be invoked by a caller who does not hold the active turn, so another agent can advance or rerun the workflow out of turn.
+- Recommended fix: Require `ensureTurnOwner()` for all turn-sensitive advance actions, not just `release_turn`, and extend `validateAdvanceAction()` accordingly. Add tests that a non-owner cannot call `review_complete`, `request_response`, or `request_rerun` while another agent holds the turn.
+- Confidence: high
+
+### 3. [HIGH] `hub_start_debate` reports success before validating the debate configuration
+- Location: src/mcp-collab-tools.js:380
+- Why it matters: The MCP tool schedules `runDebate()` in the background and immediately returns success. Invalid inputs such as two agents without a decider, or unknown agent IDs that later fail in `getAdapter()`, are only surfaced asynchronously in logs after the caller was told the debate started.
+- Recommended fix: Validate the full config synchronously in `hub_start_debate` before returning success: ensure every requested agent has a registered adapter, ensure two-agent debates have a valid decider, and return `isError: true` for invalid configs. Add MCP tests for both cases.
+- Confidence: high
+
+### 4. [HIGH] Failed session runs are never removed from `activeSessions`
+- Location: src/server.js:273
+- Why it matters: Cleanup now happens only on the success path. If `runSession()` throws, the catch block finalizes and saves the failed session but leaves it in `activeSessions`, causing memory leaks and making shutdown logic think work is still active.
+- Recommended fix: Move `this.activeSessions.delete(sessionId)` into a `finally` block in `runSession()`, or duplicate cleanup in the catch path. Add a test that forces `for await` or adapter execution to throw and assert the failed session is no longer in `activeSessions`.
+- Confidence: high
+
+### 5. [MEDIUM] Claude assistant chunks will be emitted twice as `raw_output`
+- Location: src/adapters/claude-code-parsing.js:93
+- Why it matters: `parseStreamLine()` now creates a `raw_output` event for assistant messages, but `handleProcessOutput()` already emits `raw_output` for every chunk. The Claude path therefore duplicates output in the event log and any UI/telemetry built on those events.
+- Recommended fix: Have `parseStreamLine()` emit only semantic events such as `status/agent_message`, and leave raw chunk emission to `adapter-execution.js`. Add a test that one assistant NDJSON line produces exactly one `raw_output` event end-to-end.
+- Confidence: high
+
+### 6. [MEDIUM] Claude fallback parsing fabricates a medium finding from any non-JSON prose that does not literally contain “no issues”
+- Location: src/adapters/claude-code-parsing.js:169
+- Why it matters: Responses like “Looks good overall” or “I did not find any bugs” will be turned into a synthetic medium-severity finding, creating false positives and bad rerun/debate inputs.
+- Recommended fix: Tighten the fallback so it returns no findings unless the text matches a real issue pattern, or only enable the synthetic summary finding behind an explicit flag. Add tests for benign non-JSON completions such as “Looks good overall” and “I didn’t find any bugs.”
+- Confidence: high
+
+### 7. [MEDIUM] A decider can also be one of the debating agents, which silently turns tie-break into that agent’s own vote
+- Location: src/hub/debate-orchestrator.js:525
+- Why it matters: `initDebate()` only checks that a decider exists. Later, `runTieBreakerIfNeeded()` skips the tie-break when the decider is one of the debating agents, but `mergeFinalFindings()` still treats that agent’s existing evaluation as the decider vote. That is not an independent tie-break.
+- Recommended fix: Reject configs where `decider` is included in `agents`, or explicitly document and implement non-independent tie-break semantics. Add a test proving that a debating agent cannot also serve as the decider.
+- Confidence: high
+
+### 8. [MEDIUM] Expired turns do not actually let another agent claim the turn
+- Location: src/hub/session.js:387
+- Why it matters: The new expiration path says it allows other agents to claim the turn, but it resets `collabState` to `waitingStateForAgent(ownerId, ...)`, which keeps the same agent as the expected claimant. After expiry, the opposite side still cannot take over.
+- Recommended fix: Decide the intended expiry behavior and encode it explicitly. If expiry should hand control back to the workflow, transition to a neutral or next-actor state instead of `waitingStateForAgent(ownerId, ...)`. Add a test that verifies who can claim after a turn expires.
+- Confidence: high
+
+### 9. [MEDIUM] `stop()` now waits 30s on sessions that were intentionally created with `autoStart=false`
+- Location: src/server.js:91
+- Why it matters: `apiCreateSession()` always inserts the new session into `activeSessions`, but `stop()` now waits for every `activeSessions` entry to finish. A pending session created for inspection or manual start never completes, so every shutdown pays the full 30 second delay.
+- Recommended fix: Only wait on actively running/debating sessions during shutdown, or stop storing non-running sessions in `activeSessions`. Add a test that creates `autoStart=false` sessions, calls `stop()`, and verifies shutdown returns promptly.
+- Confidence: high
+
+## Recommendations
+- Fix the MCP/session lifecycle regressions first: remove the stream-iterator self-timeout, and guarantee `activeSessions` cleanup in both success and failure paths.
+- Tighten collaboration authorization: require turn ownership for all turn-sensitive advance actions, and correct the expired-turn state transition so it matches the intended claimant behavior.
+- Harden debate startup: validate agent IDs and decider constraints synchronously in `hub_start_debate`, and forbid `decider` from overlapping with debating agents.
+- Clean up the Claude adapter path: stop double-emitting `raw_output` and tighten fallback parsing so non-issue prose does not become synthetic findings.
+- Add regression tests for shutdown with `autoStart=false`, invalid debate configs, expired-turn claiming, and quiet-but-successful MCP runs.
+- Rerun review: yes

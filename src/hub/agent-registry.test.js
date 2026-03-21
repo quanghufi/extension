@@ -94,7 +94,7 @@ describe('AgentRegistry', () => {
         // gemini stays pending
         const running = reg.allInState('running');
         assert.equal(running.length, 2);
-        assert.deepEqual(running.map(a => a.agentId).sort(), ['semgrep', 'codex']);
+        assert.deepEqual(running.map(a => a.agentId).sort(), ['codex', 'semgrep']);
         assert.equal(reg.allInState('pending').length, 1);
     });
 

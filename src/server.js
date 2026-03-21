@@ -18,8 +18,9 @@ import { SnapshotManager } from './snapshot/snapshot-manager.js';
 import { apiListSessions, apiCreateSession, apiGetSession, apiDeleteSession, apiGetEvents, apiGetFindings, apiEvaluateFindings, apiRerunSession } from './api-routes.js';
 import { apiListMessages, apiPostMessage, apiClaimTurn, apiAssignAgent, apiAdvanceSession } from './collab-routes.js';
 import { handleWsConnection, broadcastEvent } from './ws-handler.js';
-import { getAdapter } from './adapters/adapter-registry.js';
+import { getAdapter, hasAdapter } from './adapters/adapter-registry.js';
 import { createEvent } from './schema/events.js';
+import { DebateExecutor } from './hub/debate-orchestrator.js';
 
 // ── Constants ────────────────────────────────────────
 
@@ -85,20 +86,50 @@ export class HubServer {
      * Stop the server.
      * @returns {Promise<void>}
      */
-    stop() {
-        return new Promise((resolve) => {
-            if (this._wss) {
-                for (const client of this._wss.clients) {
-                    client.close(1001, 'Server shutting down');
+    async stop() {
+        // Wait for active sessions to complete (with timeout)
+        const shutdownTimeout = 30_000;
+        const startWait = Date.now();
+
+        if (this.activeSessions.size > 0) {
+            // Wait for sessions that are running OR have active debates
+            const runningSessions = [...this.activeSessions.values()].filter(
+                (s) => s.state === 'running' || s.debateActive
+            );
+
+            if (runningSessions.length > 0) {
+                console.error(`[Server] Waiting for ${runningSessions.length} running session(s) to complete...`);
+
+                while (
+                    [...this.activeSessions.values()].some((s) => s.state === 'running' || s.debateActive) &&
+                    Date.now() - startWait < shutdownTimeout
+                ) {
+                    await new Promise((r) => setTimeout(r, 500));
                 }
-                this._wss.close();
-            }
-            if (this._server) {
-                this._server.close(() => resolve());
+
+                const remaining = [...this.activeSessions.values()].filter((s) => s.state === 'running' || s.debateActive);
+                if (remaining.length > 0) {
+                    console.error(`[Server] ${remaining.length} session(s) did not complete within ${shutdownTimeout}ms — forcing shutdown`);
+                }
             } else {
-                resolve();
+                console.error(`[Server] ${this.activeSessions.size} session(s) in activeSessions but none running — skipping wait`);
             }
-        });
+        }
+
+        // Close WebSocket connections
+        if (this._wss) {
+            for (const client of this._wss.clients) {
+                client.close(1001, 'Server shutting down');
+            }
+            this._wss.close();
+        }
+
+        // Close HTTP server
+        if (this._server) {
+            await new Promise((resolve) => {
+                this._server.close(() => resolve());
+            });
+        }
     }
 
     /**
@@ -167,6 +198,69 @@ export class HubServer {
                 session.finalize('failed');
                 this.store.save(session);
             }
+        } finally {
+            // Fix #4: Always remove from activeSessions to prevent memory leak
+            this.activeSessions.delete(sessionId);
+        }
+    }
+
+    /**
+     * Run a multi-agent debate on a completed session.
+     * @param {string} sessionId
+     * @param {{ agents: string[], maxRounds?: number, decider?: string, consensusThreshold?: number }} config
+     * @returns {Promise<{ logicalFindings: any[], finalFindings: any[], evaluations: any[] }>}
+     */
+    async runDebate(sessionId, config) {
+        const session = this.activeSessions.get(sessionId) ?? this.store.load(sessionId);
+        if (!session) {
+            throw new Error(`runDebate: Session not found: ${sessionId}`);
+        }
+
+        // Track session while debate is running
+        this.activeSessions.set(sessionId, session);
+
+        const executor = new DebateExecutor({
+            session,
+            onSystemMessage: (msg) => {
+                console.error(`[Debate:${sessionId}] ${msg}`);
+            },
+            onEvent: (event) => {
+                session.addEvent(event, { force: true });
+                this.broadcast(sessionId, event);
+            },
+        });
+
+        try {
+            // Emit debate_started event
+            const startedEvent = createEvent(sessionId, 'system', 'debate_started', {
+                agents: config.agents,
+                maxRounds: config.maxRounds ?? 3,
+                decider: config.decider ?? null,
+            });
+            session.addEvent(startedEvent, { force: true });
+            this.broadcast(sessionId, startedEvent);
+
+            const result = await executor.run(config);
+
+            // Emit debate_resolved event
+            const resolvedEvent = createEvent(sessionId, 'system', 'debate_resolved', {
+                debateState: session.debateState,
+                survivalCount: result.logicalFindings.length,
+            });
+            session.addEvent(resolvedEvent, { force: true });
+            this.broadcast(sessionId, resolvedEvent);
+
+            this.store.save(session);
+            return result;
+        } catch (err) {
+            console.error(`[Debate] runDebate error for ${sessionId}:`, err);
+            session.debateActive = false;
+            session.debateState = 'failed';
+            this.store.save(session);
+            throw err;
+        } finally {
+            // Always cleanup activeSessions to prevent memory leak
+            this.activeSessions.delete(sessionId);
         }
     }
 

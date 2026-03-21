@@ -174,5 +174,19 @@ describe('session-collab-integration', () => {
                 /requires a valid turn token/i,
             );
         });
+
+        it('release_turn requires the current turn owner token', () => {
+            const session = createTestSession();
+            const { token } = session.claimTurn('codex');
+
+            assert.throws(
+                () => session.advanceCollabState('release_turn', 'antigravity', { turnToken: token }),
+                /turn owned by "codex"/i,
+            );
+
+            assert.equal(session.collabState, 'codex_reviewing');
+            assert.equal(session.turn.ownerId, 'codex');
+            assert.equal(session.turn.status, 'claimed');
+        });
     });
 });
