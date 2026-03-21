@@ -128,6 +128,41 @@ describe('BaseAdapter.execute (integration with echo)', () => {
         assert.equal(result.findings.length, 0);
     });
 
+    it('writes stdinText to the child process when provided by the adapter', async () => {
+        class StdinAdapter extends BaseAdapter {
+            buildCommand() {
+                if (process.platform === 'win32') {
+                    return {
+                        cmd: 'powershell',
+                        args: ['-Command', '$input | ForEach-Object { $_ }'],
+                        stdinText: 'stdin payload',
+                    };
+                }
+                return {
+                    cmd: 'sh',
+                    args: ['-c', 'cat'],
+                    stdinText: 'stdin payload',
+                };
+            }
+            parseChunk() { return []; }
+            parseResult(allOutput) {
+                return allOutput.includes('stdin payload') ? [] : [{ missing: true }];
+            }
+        }
+
+        const adapter = new StdinAdapter('stdin-test', {
+            firstByteMs: 5000,
+            idleMs: 5000,
+            hardMs: 10000,
+        });
+
+        const { done } = adapter.execute('sess-1', process.cwd(), 'ignored prompt');
+        const result = await done;
+
+        assert.equal(result.status, 'ok');
+        assert.equal(result.findings.length, 0);
+    });
+
     it('completes with ok status for successful command', async () => {
         class EchoAdapter extends BaseAdapter {
             buildCommand() {

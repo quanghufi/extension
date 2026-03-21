@@ -74,7 +74,7 @@ export class MergeEngine {
         }
 
         return {
-            merged: groups.map((group) => this._buildMergedFinding(group)),
+            merged: groups.map((group) => this._buildMergedFinding(group, agentMap)),
             stats: { total: findings.length, merged: mergedCount, unique: groups.length, conflicts },
         };
     }
@@ -128,9 +128,14 @@ export class MergeEngine {
 
     /**
      * @param {{ representative: import('../schema/events.js').Finding, sources: import('../schema/events.js').Finding[], agents: string[], confidence: number }} group
+     * @param {Map<string, string>} agentMap
      * @returns {MergedFinding}
      */
-    _buildMergedFinding(group) {
+    _buildMergedFinding(group, agentMap) {
+        const why_it_matters = pickBestFindingText(group.sources, agentMap, 'why_it_matters');
+        const fix_instructions = pickBestFindingText(group.sources, agentMap, 'fix_instructions');
+        const evidence = pickBestFindingText(group.sources, agentMap, 'evidence');
+
         return {
             id: `M-${uuidv4().slice(0, 8).toUpperCase()}`,
             file: group.representative.file,
@@ -141,6 +146,9 @@ export class MergeEngine {
             sources: group.sources,
             confidence: group.sources.length === 1 ? 1 : group.confidence,
             dedupe_key: group.representative.dedupe_key,
+            evidence,
+            why_it_matters,
+            fix_instructions,
         };
     }
 }
@@ -161,6 +169,47 @@ function agentPriority(agentId) {
 }
 
 /**
+ * Prefer actionable, non-empty text from the highest-priority source.
+ * When priority ties, keep the longer explanation.
+ *
+ * @param {import('../schema/events.js').Finding[]} findings
+ * @param {Map<string, string>} agentMap
+ * @param {'evidence'|'why_it_matters'|'fix_instructions'} field
+ * @returns {string|null}
+ */
+function pickBestFindingText(findings, agentMap, field) {
+    let best = null;
+
+    for (const finding of findings) {
+        const value = typeof finding[field] === 'string' ? finding[field].trim() : '';
+        if (!value) {
+            continue;
+        }
+
+        if (!best) {
+            best = finding;
+            continue;
+        }
+
+        const bestPriority = agentPriority(agentMap.get(best.id) ?? null);
+        const currentPriority = agentPriority(agentMap.get(finding.id) ?? null);
+        if (currentPriority < bestPriority) {
+            best = finding;
+            continue;
+        }
+        if (currentPriority === bestPriority && value.length > String(best[field] ?? '').trim().length) {
+            best = finding;
+        }
+    }
+
+    if (!best) {
+        return null;
+    }
+
+    return String(best[field] ?? '').trim() || null;
+}
+
+/**
  * @typedef {Object} MergeOptions
  * @property {number} [threshold]
  * @property {number} [lineTolerance]
@@ -176,6 +225,9 @@ function agentPriority(agentId) {
  * @property {import('../schema/events.js').Finding[]} sources
  * @property {number} confidence
  * @property {string} dedupe_key
+ * @property {string|null} evidence
+ * @property {string|null} why_it_matters
+ * @property {string|null} fix_instructions
  *
  * @typedef {Object} MergeStats
  * @property {number} total

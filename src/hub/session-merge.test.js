@@ -58,4 +58,36 @@ describe('Session merge integration', () => {
         assert.deepEqual(session.groupedFindings[0].agents, ['codex', 'semgrep', 'eslint']);
         assert.deepEqual(session.mergedFindings[0].agents, ['semgrep', 'codex', 'eslint']);
     });
+
+    it('surfaces actionable remediation from merged sources', () => {
+        const session = new Session({ projectDir: '/project', prompt: 'review' });
+        session.start();
+
+        const codexFinding = createFinding({
+            severity: 'high',
+            summary: 'Body reader can hang forever on aborted request',
+            evidence: 'No aborted/error handlers are attached to the stream.',
+            file: 'src/http-utils.js',
+            line: 44,
+            fix_instructions: 'Listen for error and aborted, then reject and clean up listeners.',
+            why_it_matters: 'Production requests can hang until upstream timeout.',
+        });
+        const semgrepFinding = createFinding({
+            severity: 'high',
+            summary: 'Body reader can hang forever on aborted request',
+            evidence: '',
+            file: 'src/http-utils.js',
+            line: 44,
+        });
+
+        session.addEvent(createEvent(session.id, 'codex', 'finding', { raw: codexFinding }));
+        session.addEvent(createEvent(session.id, 'semgrep', 'finding', { raw: semgrepFinding }));
+
+        session.finalize('completed', [codexFinding, semgrepFinding]);
+
+        assert.equal(session.mergedFindings.length, 1);
+        assert.equal(session.mergedFindings[0].why_it_matters, 'Production requests can hang until upstream timeout.');
+        assert.equal(session.mergedFindings[0].fix_instructions, 'Listen for error and aborted, then reject and clean up listeners.');
+        assert.equal(session.mergedFindings[0].evidence, 'No aborted/error handlers are attached to the stream.');
+    });
 });

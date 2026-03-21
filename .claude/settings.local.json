@@ -2,7 +2,19 @@
   "permissions": {
     "allow": [
       "Bash(ls:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "mcp__neural-memory__nmem_recap",
+      "Bash(npm test:*)",
+      "Bash(node --test src/server-debate.test.js)",
+      "Bash(node -e \":*)",
+      "Bash(claude:*)",
+      "Bash(node .tmp-debug-debate.mjs)",
+      "Bash(npx vitest:*)",
+      "Bash(node --test src/**/*.test.js)",
+      "Bash(where codex:*)",
+      "Bash(codex --version)",
+      "Bash(where claude:*)",
+      "Bash(node -e:*)"
     ]
   }
 }

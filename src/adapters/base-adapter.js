@@ -57,7 +57,7 @@ export class BaseAdapter {
      * Build the CLI command and arguments.
      * @param {string} _snapshotPath - Path to code snapshot
      * @param {string} _prompt - Review prompt
-     * @returns {{ cmd: string, args: string[] }}
+     * @returns {{ cmd: string, args: string[], stdinText?: string }}
      */
     buildCommand(_snapshotPath, _prompt) {
         throw new Error('buildCommand() must be overridden by subclass');
@@ -103,19 +103,20 @@ export class BaseAdapter {
      * @param {string} sessionId - Session UUID
      * @param {string} snapshotPath - Absolute path to code snapshot
      * @param {string} prompt - Review prompt text
+     * @param {{ timeouts?: { firstByteMs: number, idleMs: number, hardMs: number } }} [options]
      * @returns {{ stream: AsyncIterable<import('../schema/events.js').Event>, done: Promise<import('../schema/events.js').AdapterResult> }}
      */
-    execute(sessionId, snapshotPath, prompt) {
-        const { cmd, args } = this.buildCommand(snapshotPath, prompt);
+    execute(sessionId, snapshotPath, prompt, options = {}) {
+        const { cmd, args, stdinText } = this.buildCommand(snapshotPath, prompt);
         const execution = this.getExecutionOptions(snapshotPath);
 
         return executeProcess({
             sessionId,
             snapshotPath,
             agentId: this.agentId,
-            command: { cmd, args },
+            command: { cmd, args, stdinText },
             env: execution.env,
-            timeouts: this.timeouts,
+            timeouts: options.timeouts ?? this.timeouts,
             parseChunk: (chunk, sid) => this.parseChunk(chunk, sid),
             parseResult: (allOutput, sid) => this.parseResult(allOutput, sid),
         });

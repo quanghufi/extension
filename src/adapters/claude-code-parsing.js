@@ -31,18 +31,31 @@ export function buildReviewPrompt(prompt, contextSnippet) {
     const parts = [
         prompt,
         '',
+        'Review the requested code scope directly.',
+        'You may inspect other files only if needed to verify a concrete interaction or call site.',
+        'Do not inspect git diff, git history, or unrelated files unless the prompt explicitly asks for that.',
+        'Report only findings supported by the code you actually inspected.',
+        'Prefer fewer, stronger findings over a long list of weak suspicions.',
+        'For every finding, explain why it matters in production and give a concrete remediation that another agent can implement directly.',
+        '',
         'IMPORTANT: Return your findings as a JSON array. Each finding must have:',
         '- "summary": short description of the issue',
         '- "evidence": detailed explanation / code quotes',
+        '- "why_it_matters": specific impact if left unfixed',
+        '- "fix_instructions": concrete change to make, not generic advice',
         '- "severity": one of "critical", "high", "medium", "low"',
         '- "file": relative file path',
         '- "line": line number (null if not applicable)',
+        '- "confidence": number from 0.0 to 1.0',
+        '- When adjudicating disputed findings that already include a "dedupeKey", copy that exact "dedupeKey" into each surviving finding.',
         '',
         'Format your response as:',
         '```json',
-        '[{"summary":"...","evidence":"...","severity":"...","file":"...","line":0}]',
+        '[{"summary":"...","evidence":"...","why_it_matters":"...","fix_instructions":"...","severity":"...","file":"...","line":0,"confidence":0.9}]',
         '```',
         '',
+        'If the prompt is asking you to adjudicate disputed findings, return ONLY a JSON array and nothing before or after it.',
+        'If a finding is real but you cannot provide a useful fix, explain the blocker in "fix_instructions" instead of leaving it empty.',
         'If no issues found, return: []',
     ];
 
@@ -83,9 +96,7 @@ export function parseStreamLine(line, sessionId, agentId) {
     const events = [];
 
     if (parsed.type === 'system' && parsed.subtype === 'init') {
-        events.push(createEvent(sessionId, agentId, 'status', {
-            state: 'started', message: 'Claude Code review started',
-        }));
+        return events;
     } else if (parsed.type === 'assistant') {
         // Extract text content from assistant message
         const text = extractAssistantText(parsed);
@@ -96,14 +107,6 @@ export function parseStreamLine(line, sessionId, agentId) {
                 state: 'agent_message', text,
             }));
         }
-    } else if (parsed.type === 'result') {
-        const success = parsed.subtype === 'success' && !parsed.is_error;
-        events.push(createEvent(sessionId, agentId, 'status', {
-            state: 'done',
-            success,
-            duration_ms: parsed.duration_ms || 0,
-            num_turns: parsed.num_turns || 1,
-        }));
     }
 
     return events;
@@ -260,23 +263,65 @@ function tryParseJsonFindings(text, _sessionId) {
  */
 function tryDirectParse(jsonStr) {
     try {
-        const arr = JSON.parse(jsonStr.trim());
-        if (!Array.isArray(arr)) return null;
+        const parsed = JSON.parse(jsonStr.trim());
+        const arr = Array.isArray(parsed)
+            ? parsed
+            : Array.isArray(parsed?.findings)
+                ? parsed.findings
+                : null;
+        if (!arr) return null;
         if (arr.length === 0) return [];
 
         return arr
             .filter((/** @type {any} */ item) => item && (item.summary || item.title || item.description || item.issue))
-            .map((/** @type {any} */ item) => createFinding({
-                summary: item.summary || item.title || item.issue || item.description || 'Untitled finding',
-                evidence: item.evidence || item.detail || item.description || item.recommendation || item.suggestion || '',
-                severity: mapSeverity(item.severity),
-                file: item.file || '(review)',
-                line: typeof item.line === 'number' ? item.line : null,
-                confidence: typeof item.confidence === 'number' ? item.confidence : 0.5,
-            }));
+            .map(normalizeClaudeFinding);
     } catch {
         return null;
     }
+}
+
+/**
+ * @param {any} item
+ * @returns {import('../schema/events.js').Finding}
+ */
+function normalizeClaudeFinding(item) {
+    const finding = createFinding({
+        summary: item.summary || item.title || item.issue || item.description || 'Untitled finding',
+        evidence: item.evidence || item.detail || item.description || item.why_it_matters || item.fix_instructions || item.recommendation || item.suggestion || '',
+        severity: mapSeverity(item.severity),
+        file: item.file || '(review)',
+        line: typeof item.line === 'number' ? item.line : null,
+        confidence: normalizeConfidence(item.confidence),
+        fix_instructions: item.fix_instructions || item.recommendation || item.suggestion || null,
+        why_it_matters: item.why_it_matters || item.impact || item.risk || null,
+    });
+
+    const explicitDedupeKey = typeof item.dedupeKey === 'string'
+        ? item.dedupeKey.trim()
+        : typeof item.dedupe_key === 'string'
+            ? item.dedupe_key.trim()
+            : '';
+    if (explicitDedupeKey) {
+        finding.dedupe_key = explicitDedupeKey;
+    }
+
+    return finding;
+}
+
+/**
+ * @param {unknown} confidence
+ * @returns {number}
+ */
+function normalizeConfidence(confidence) {
+    if (typeof confidence === 'number') {
+        return Math.max(0, Math.min(1, confidence));
+    }
+
+    const normalized = String(confidence ?? '').toLowerCase().trim();
+    if (normalized === 'high') return 0.9;
+    if (normalized === 'medium') return 0.6;
+    if (normalized === 'low') return 0.3;
+    return 0.5;
 }
 
 // ── Mappers ─────────────────────────────────────────

@@ -233,14 +233,14 @@ export function handleProcessOutput({ source, data, decoder, sessionId, agentId,
  * @param {string} params.sessionId
  * @param {string} params.snapshotPath
  * @param {string} params.agentId
- * @param {{ cmd: string, args: string[] }} params.command
+ * @param {{ cmd: string, args: string[], stdinText?: string }} params.command
  * @param {Readonly<{firstByteMs: number, idleMs: number, hardMs: number}>} params.timeouts
  * @param {(chunk: string, sessionId: string) => import('../schema/events.js').Event[]} params.parseChunk
  * @param {(allOutput: string, sessionId: string) => import('../schema/events.js').Finding[]} params.parseResult
  * @returns {{ stream: AsyncIterable<import('../schema/events.js').Event>, done: Promise<import('../schema/events.js').AdapterResult> }}
  */
 export function executeProcess({ sessionId, snapshotPath, agentId, command, env, timeouts, parseChunk, parseResult }) {
-    const { cmd, args } = command;
+    const { cmd, args, stdinText } = command;
     const { enqueue, endStream, stream } = createEventQueue();
 
     const startTime = Date.now();
@@ -255,7 +255,7 @@ export function executeProcess({ sessionId, snapshotPath, agentId, command, env,
     const done = new Promise((resolveDone) => {
         const child = spawn(cmd, args, {
             cwd: snapshotPath,
-            stdio: ['ignore', 'pipe', 'pipe'],
+            stdio: ['pipe', 'pipe', 'pipe'],
             shell: false,
             env: { ...process.env, ...(env ?? {}) },
         });
@@ -266,6 +266,11 @@ export function executeProcess({ sessionId, snapshotPath, agentId, command, env,
 
         // Emit status: started
         enqueue(createEvent(sessionId, agentId, 'status', { state: 'started', cmd, args }));
+
+        if (stdinText != null && child.stdin) {
+            child.stdin.write(stdinText);
+            child.stdin.end();
+        }
 
         // ── Kill helper ───────────────────────────
         function killChild(reason) {

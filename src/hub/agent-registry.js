@@ -6,6 +6,7 @@
  *   pending → running
  *   running → completed | failed | cancelled
  *   failed  → running   (retry)
+ *   completed → running (another debate/rebuttal pass)
  *
  * @module hub/agent-registry
  */
@@ -17,7 +18,7 @@ const TRANSITIONS = {
     pending:   ['running'],
     running:   ['completed', 'failed', 'cancelled'],
     failed:    ['running'],
-    completed: [],
+    completed: ['running'],
     cancelled: [],
 };
 

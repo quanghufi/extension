@@ -367,8 +367,8 @@ class CodexReviewBridge:
             target = f"Review only the changes introduced by commit '{commit}'."
         elif review_target == "file":
             target = (
-                "Review the specified file(s) in their entirety. "
-                "Read each file and analyze for correctness, completeness, security issues, and potential improvements."
+                "Review only the specified target file in its entirety. "
+                "Analyze that file for correctness, completeness, security issues, regression risk, and missing tests."
             )
         else:
             target = (
@@ -386,6 +386,47 @@ class CodexReviewBridge:
             tracked_section = "\n".join(f"- {path}" for path in tracked_files) or "- None"
             untracked_section = "\n".join(f"- {path}" for path in untracked_files) or "- None"
 
+        scope_rules = [
+            "- Use relative file paths from the workspace root when possible.",
+            "- Use a null line when you cannot point to a specific line.",
+            '- "fix_instructions" must be specific enough for Antigravity to execute without another review pass.',
+            '- If there are no material issues, return status "clean", an empty findings list, an empty fix_plan, and rerun_review false.',
+        ]
+        scope_sections: list[str] = []
+
+        if review_target == "file":
+            scope_rules.extend(
+                [
+                    "- Stay anchored to the target file instead of switching into repository-wide or diff-wide review.",
+                    "- Inspect another file only if you must verify a direct dependency, call site, or data flow that materially affects the target file.",
+                    "- Do not spend tokens enumerating unrelated diffs, repository metadata, handoff artifacts, or debate logs.",
+                    "- Every finding must map back to the target file or to a directly verified interaction that changes that file's runtime behavior.",
+                ]
+            )
+            if tracked_section:
+                scope_sections.extend(
+                    [
+                        "",
+                        "Target file:",
+                        tracked_section,
+                    ]
+                )
+        else:
+            scope_rules.append("- Review exactly this change set first before looking elsewhere.")
+            scope_sections.extend(
+                [
+                    "",
+                    "Tracked changed files:",
+                    tracked_section,
+                    "",
+                    "Untracked files:",
+                    untracked_section,
+                ]
+            )
+
+        rules_block = "\n".join(scope_rules)
+        scope_block = "\n".join(scope_sections)
+
         return textwrap.dedent(
             f"""
             You are a strict code reviewer working for Antigravity.
@@ -399,17 +440,8 @@ class CodexReviewBridge:
             Return valid JSON matching the provided schema.
 
             Rules for findings:
-            - Use relative file paths from the workspace root when possible.
-            - Use a null line when you cannot point to a specific line.
-            - "fix_instructions" must be specific enough for Antigravity to execute without another review pass.
-            - If there are no material issues, return status "clean", an empty findings list, an empty fix_plan, and rerun_review false.
-            - Review exactly this change set first before looking elsewhere.
-
-            Tracked changed files:
-            {tracked_section}
-
-            Untracked files:
-            {untracked_section}
+            {rules_block}
+            {scope_block}
 
             Extra review focus:
             {extra_focus}
@@ -472,7 +504,6 @@ class CodexReviewBridge:
                 }
 
         if review_target == "file":
-            # For file review, pass the file path as tracked files
             changed_files = {"tracked_files": [file_path], "untracked_files": []}
 
         prompt = self.build_prompt(
@@ -619,32 +650,44 @@ class CodexReviewBridge:
     def write_artifacts(self, workspace: Path, review: dict[str, Any]) -> dict[str, str]:
         workspace = workspace.resolve()
         directory = self.ensure_artifact_dir(workspace)
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        history_id = f"{timestamp}.{uuid.uuid4().hex[:8]}"
         latest_json = directory / "codex-review.latest.json"
         latest_md = directory / "codex-review.latest.md"
-        history_json = directory / f"codex-review.{history_id}.json"
-        history_md = directory / f"codex-review.{history_id}.md"
 
         json_text = json.dumps(review, indent=2, ensure_ascii=False) + "\n"
         markdown_text = self.review_to_markdown(review)
 
         self.atomic_write_text(latest_json, json_text)
         self.atomic_write_text(latest_md, markdown_text)
-        self.atomic_write_text(history_json, json_text)
-        self.atomic_write_text(history_md, markdown_text)
+
+        # Clean up old timestamped history files — only keep latest
+        self.cleanup_history_files(directory)
 
         artifacts = {
             "latest_json": str(latest_json),
             "latest_markdown": str(latest_md),
-            "history_json": str(history_json),
-            "history_markdown": str(history_md),
         }
         self.review_cache[self.cache_key(workspace)] = {
             "review": review,
             "artifacts": artifacts,
         }
         return artifacts
+
+    @staticmethod
+    def cleanup_history_files(artifact_dir: Path) -> int:
+        """Delete all timestamped history files, keeping only latest.* files.
+
+        Returns the number of files deleted.
+        """
+        deleted = 0
+        for path in artifact_dir.glob("codex-review.*"):
+            if path.name.startswith("codex-review.latest."):
+                continue
+            try:
+                path.unlink()
+                deleted += 1
+            except OSError:
+                pass
+        return deleted
 
     @staticmethod
     def list_history_json_files(artifact_dir: Path) -> list[Path]:
@@ -682,31 +725,13 @@ class CodexReviewBridge:
             raise FileNotFoundError("No previous Codex review artifact exists for this workspace")
 
         latest_markdown = latest_json.with_suffix(".md")
-        history_payload = self.get_latest_valid_history(artifact_dir)
 
-        try:
-            review = self.load_review_file(latest_json)
-        except (json.JSONDecodeError, ValueError) as exc:
-            if history_payload is None:
-                raise ValueError(f"Latest Codex review artifact is invalid: {exc}") from exc
-            review, history_json, history_markdown = history_payload
-            json_text = json.dumps(review, indent=2, ensure_ascii=False) + "\n"
-            markdown_text = self.review_to_markdown(review)
-            self.atomic_write_text(latest_json, json_text)
-            self.atomic_write_text(latest_markdown, markdown_text)
-        else:
-            latest_markdown = self.ensure_markdown_artifact(latest_markdown, review)
-            if history_payload is None:
-                history_json = None
-                history_markdown = None
-            else:
-                _, history_json, history_markdown = history_payload
+        review = self.load_review_file(latest_json)
+        latest_markdown = self.ensure_markdown_artifact(latest_markdown, review)
 
         artifacts = {
             "latest_json": str(latest_json),
             "latest_markdown": str(latest_markdown) if latest_markdown.exists() else "",
-            "history_json": str(history_json) if history_json else "",
-            "history_markdown": str(history_markdown) if history_markdown else "",
         }
         self.review_cache[self.cache_key(workspace)] = {
             "review": review,

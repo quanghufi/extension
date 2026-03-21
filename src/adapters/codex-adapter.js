@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { BaseAdapter } from './base-adapter.js';
 import {
     formatReviewPrompt,
@@ -34,17 +35,27 @@ export class CodexAdapter extends BaseAdapter {
     /**
      * @param {string} _snapshotPath
      * @param {string} prompt
-     * @returns {{ cmd: string, args: string[] }}
+     * @returns {{ cmd: string, args: string[], stdinText: string }}
      */
     buildCommand(_snapshotPath, prompt) {
+        const schemaPath = path.resolve(
+            path.dirname(fileURLToPath(import.meta.url)),
+            '..',
+            'schema',
+            'codex-review-schema.json',
+        );
         return {
             cmd: 'codex',
             args: [
                 'exec',
-                'review',
                 '--json',
-                formatReviewPrompt(prompt),
+                '--sandbox',
+                'danger-full-access',
+                '--output-schema',
+                schemaPath,
+                '-',
             ],
+            stdinText: formatReviewPrompt(prompt),
         };
     }
 
@@ -91,6 +102,22 @@ export class CodexAdapter extends BaseAdapter {
             } catch {
                 // Non-fatal — user auth/config may not exist yet.
             }
+        }
+
+        const configPath = path.join(codexDir, 'config.toml');
+        const escapedWorkspacePath = workspacePath.replace(/\\/g, '\\\\');
+        const trustHeader = `[projects."${escapedWorkspacePath}"]`;
+        const trustBlock = `${trustHeader}\ntrust_level = "trusted"\n`;
+        try {
+            const existing = fs.existsSync(configPath)
+                ? fs.readFileSync(configPath, 'utf8')
+                : '';
+            if (!existing.includes(trustHeader)) {
+                const separator = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
+                fs.writeFileSync(configPath, `${existing}${separator}${trustBlock}`);
+            }
+        } catch {
+            // Non-fatal; Codex may still succeed if the workspace is already trusted.
         }
 
         return {

@@ -2,6 +2,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { CodexAdapter, mapSeverity } from './codex-adapter.js';
+import { formatReviewPrompt } from './codex-adapter-parsing.js';
 
 describe('CodexAdapter', () => {
     it('has agentId "codex"', () => {
@@ -9,14 +10,25 @@ describe('CodexAdapter', () => {
         assert.equal(adapter.agentId, 'codex');
     });
 
-    it('buildCommand returns current codex exec review args', () => {
+    it('buildCommand returns current codex exec args', () => {
         const adapter = new CodexAdapter();
         const { cmd, args } = adapter.buildCommand('/path/to/snapshot', 'Review this code');
 
         assert.equal(cmd, 'codex');
-        assert.deepEqual(args.slice(0, 3), ['exec', 'review', '--json']);
-        assert.match(args[3], /Return the final answer as a JSON array only\./);
-        assert.match(args[3], /Review this code/);
+        assert.deepEqual(args.slice(0, 2), ['exec', '--json']);
+        assert.deepEqual(args.slice(2, 4), ['--sandbox', 'danger-full-access']);
+        assert.equal(args[4], '--output-schema');
+        assert.match(args[5], /codex-review-schema\.json$/);
+        assert.equal(args[6], '-');
+    });
+
+    it('sends the formatted prompt through stdin instead of the command line', () => {
+        const adapter = new CodexAdapter();
+        const { stdinText } = adapter.buildCommand('/path/to/snapshot', 'Review this code');
+
+        assert.equal(typeof stdinText, 'string');
+        assert.match(stdinText, /Review this code/);
+        assert.match(stdinText, /Return the final answer as a JSON object/i);
     });
 
     it('uses default base timeouts', () => {
@@ -71,6 +83,17 @@ describe('CodexAdapter.parseChunk', () => {
     });
 });
 
+describe('formatReviewPrompt', () => {
+    it('adds strict scope guardrails for focused file review', () => {
+        const prompt = formatReviewPrompt('Review only src/http-utils.js');
+        assert.match(prompt, /Review only src\/http-utils\.js/);
+        assert.match(prompt, /Do not inspect git diff, git history, or unrelated files/i);
+        assert.match(prompt, /You may inspect other files only if needed/i);
+        assert.match(prompt, /Return the final answer as a JSON object/i);
+        assert.match(prompt, /status, summary, findings, fix_plan, rerun_review/i);
+    });
+});
+
 describe('CodexAdapter.parseResult', () => {
     const adapter = new CodexAdapter();
 
@@ -102,6 +125,39 @@ describe('CodexAdapter.parseResult', () => {
         assert.equal(findings[0].line, 10);
     });
 
+    it('extracts findings from codex schema object wrapper', () => {
+        const output = JSON.stringify({
+            type: 'item.completed',
+            item: {
+                type: 'agent_message',
+                text: JSON.stringify({
+                    status: 'has_findings',
+                    summary: 'Found one issue',
+                    findings: [
+                        {
+                            title: 'Null check missing',
+                            why_it_matters: 'Can crash production requests.',
+                            file: 'src/a.js',
+                            line: 10,
+                            severity: 'high',
+                            fix_instructions: 'Add a null check.',
+                            confidence: 'high',
+                        },
+                    ],
+                    fix_plan: ['Add null check'],
+                    rerun_review: false,
+                }),
+            },
+        });
+
+        const findings = adapter.parseResult(output, 'sess-1');
+        assert.equal(findings.length, 1);
+        assert.equal(findings[0].summary, 'Null check missing');
+        assert.equal(findings[0].why_it_matters, 'Can crash production requests.');
+        assert.equal(findings[0].fix_instructions, 'Add a null check.');
+        assert.equal(findings[0].confidence, 0.9);
+    });
+
     it('returns empty array when final message is not structured json', () => {
         const output = JSON.stringify({
             type: 'item.completed',
@@ -123,6 +179,35 @@ describe('CodexAdapter.parseResult', () => {
 
         const findings = adapter.parseResult(output, 'sess-1');
         assert.equal(findings[0].confidence, 1);
+    });
+
+    it('maps title/body/findings strings from codex real-world output', () => {
+        const output = JSON.stringify({
+            type: 'item.completed',
+            item: {
+                type: 'agent_message',
+                text: JSON.stringify([
+                    {
+                        title: 'Request body hangs forever on abort',
+                        body: 'Promise only resolves on end and never rejects on abort/error.',
+                        severity: 'high',
+                        file: 'src/http-utils.js',
+                        line: 20,
+                        confidence: 'high',
+                        fix_instructions: 'Reject on error and aborted.',
+                        why_it_matters: 'Routes can hang forever.',
+                    },
+                ]),
+            },
+        });
+
+        const findings = adapter.parseResult(output, 'sess-1');
+        assert.equal(findings.length, 1);
+        assert.equal(findings[0].summary, 'Request body hangs forever on abort');
+        assert.equal(findings[0].evidence, 'Promise only resolves on end and never rejects on abort/error.');
+        assert.equal(findings[0].confidence, 0.9);
+        assert.equal(findings[0].fix_instructions, 'Reject on error and aborted.');
+        assert.equal(findings[0].why_it_matters, 'Routes can hang forever.');
     });
 });
 

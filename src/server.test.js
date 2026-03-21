@@ -2,14 +2,25 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { HubServer } from './server.js';
 import { getAdapter, registerAdapter } from './adapters/adapter-registry.js';
 import { Session } from './hub/session.js';
 
 const TEST_PORT = 33847 + Math.floor(Math.random() * 1000);
+const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 let server;
 
 describe('HubServer', () => {
+    it('defaults storage paths to project-root data directories', () => {
+        const defaultServer = new HubServer({ port: 0 });
+
+        assert.equal(defaultServer.store.sessionsDir, path.join(PROJECT_ROOT, 'data', 'sessions'));
+        assert.equal(defaultServer.snapshots.baseDir, path.join(PROJECT_ROOT, 'tmp', 'snapshots'));
+        assert.ok(!defaultServer.store.sessionsDir.includes(`${path.sep}src${path.sep}data${path.sep}`));
+    });
+
     before(async () => {
         server = new HubServer({
             port: TEST_PORT,
@@ -77,7 +88,7 @@ describe('HubServer', () => {
         assert.ok(body.session);
         assert.ok(body.session.id);
         assert.equal(body.session.state, 'pending');
-        assert.equal(body.session.agentId, 'mcp-codex');
+        assert.equal(body.session.agentId, 'codex');
     });
 
     it('POST /api/sessions supports autoStart=false without launching a background review', async () => {
@@ -113,7 +124,7 @@ describe('HubServer', () => {
 
         assert.equal(status, 201);
         assert.equal(body.session.snapshotPath, '/snapshot');
-        assert.equal(body.session.agentId, 'mcp-codex');
+        assert.equal(body.session.agentId, 'codex');
     });
 
     it('GET /api/sessions/:id returns a session', async () => {
@@ -159,6 +170,37 @@ describe('HubServer', () => {
         assert.ok(Array.isArray(body.events));
     });
 
+    it('GET /api/sessions/:id/findings exposes resolved and final findings', async () => {
+        const session = new Session({
+            projectDir: '/findings-api',
+            prompt: 'test',
+            agentId: 'codex',
+        });
+        session.start();
+        session.finalize('completed', [{
+            id: 'F-FINAL123',
+            severity: 'high',
+            summary: 'Merged finding',
+            evidence: 'evidence',
+            file: 'src/app.js',
+            line: 10,
+            confidence: 0.9,
+            dedupe_key: 'dedupe-final-123',
+            fix_instructions: 'Add the missing guard.',
+            why_it_matters: 'Crashes the request path.',
+        }]);
+        server.store.save(session);
+
+        const { status, body } = await apiRequest(`/api/sessions/${session.id}/findings`);
+        assert.equal(status, 200);
+        assert.ok(Array.isArray(body.merged));
+        assert.ok(Array.isArray(body.resolved));
+        assert.ok(Array.isArray(body.finalFindings));
+        assert.equal(body.merged[0].fix_instructions, 'Add the missing guard.');
+        assert.equal(body.resolved[0].why_it_matters, 'Crashes the request path.');
+        assert.equal(body.finalFindings[0].summary, 'Merged finding');
+    });
+
     it('DELETE /api/sessions/:id deletes session', async () => {
         const createRes = await apiRequest('/api/sessions', {
             method: 'POST',
@@ -185,7 +227,7 @@ describe('HubServer', () => {
     });
 
     it('runSession records failed completion without terminal-state addEvent error', async () => {
-        const originalCodex = getAdapter('mcp-codex');
+        const originalCodex = getAdapter('codex');
         const originalError = console.error;
         const logged = [];
 
@@ -194,7 +236,7 @@ describe('HubServer', () => {
         };
 
         registerAdapter({
-            agentId: 'mcp-codex',
+            agentId: 'codex',
             buildCommand: () => ({ cmd: 'fake', args: [] }),
             parseChunk: async function* () { },
             parseResult: () => [],
@@ -227,9 +269,9 @@ describe('HubServer', () => {
     });
 
     it('runSession records one error event when adapter execution throws', async () => {
-        const originalCodex = getAdapter('mcp-codex');
+        const originalCodex = getAdapter('codex');
         registerAdapter({
-            agentId: 'mcp-codex',
+            agentId: 'codex',
             buildCommand: () => ({ cmd: 'fake', args: [] }),
             parseChunk: async function* () { },
             parseResult: () => [],
@@ -260,9 +302,9 @@ describe('HubServer', () => {
     });
 
     it('runSession prefers snapshotPath over projectDir', async () => {
-        const originalMcpCodex = getAdapter('mcp-codex');
+        const originalMcpCodex = getAdapter('codex');
         registerAdapter({
-            agentId: 'mcp-codex',
+            agentId: 'codex',
             buildCommand: () => ({ cmd: 'fake', args: [] }),
             parseChunk: async function* () { },
             parseResult: () => [],
@@ -297,9 +339,9 @@ describe('HubServer', () => {
     });
 
     it('runSession auto-syncs Codex completion into collab state for clean rerun sessions', async () => {
-        const originalMcpCodex = getAdapter('mcp-codex');
+        const originalMcpCodex = getAdapter('codex');
         registerAdapter({
-            agentId: 'mcp-codex',
+            agentId: 'codex',
             buildCommand: () => ({ cmd: 'fake', args: [] }),
             parseChunk: async function* () { },
             parseResult: () => [],
@@ -317,7 +359,7 @@ describe('HubServer', () => {
             const parent = new Session({
                 projectDir: '/clean-rerun',
                 prompt: 'test',
-                agentId: 'mcp-codex',
+                agentId: 'codex',
             });
             const child = parent.createRetry();
             server.activeSessions.set(child.id, child);
@@ -338,9 +380,9 @@ describe('HubServer', () => {
     });
 
     it('runSession auto-syncs Codex completion into antigravity turn when findings exist', async () => {
-        const originalMcpCodex = getAdapter('mcp-codex');
+        const originalMcpCodex = getAdapter('codex');
         registerAdapter({
-            agentId: 'mcp-codex',
+            agentId: 'codex',
             buildCommand: () => ({ cmd: 'fake', args: [] }),
             parseChunk: async function* () { },
             parseResult: () => [],
@@ -369,7 +411,7 @@ describe('HubServer', () => {
             const parent = new Session({
                 projectDir: '/findings-rerun',
                 prompt: 'test',
-                agentId: 'mcp-codex',
+                agentId: 'codex',
             });
             const child = parent.createRetry();
             server.activeSessions.set(child.id, child);

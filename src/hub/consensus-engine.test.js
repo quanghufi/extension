@@ -235,6 +235,25 @@ describe('consensus-engine', () => {
             assert.equal(merged.length, 0); // decider rejected → dropped
         });
 
+        it('soft_union keeps disputed finding even when decider rejects it', () => {
+            const findings = [
+                { dedupeKey: 'f1', severity: 'medium', title: 'Debatable', agentId: 'codex' },
+            ];
+            const evals = [
+                { dedupeKey: 'f1', verdict: 'accepted', agentId: 'codex' },
+                { dedupeKey: 'f1', verdict: 'rejected', agentId: 'antigravity' },
+            ];
+
+            const merged = engine.mergeFinalFindings(findings, evals, {
+                decider: 'antigravity',
+                policy: 'soft_union',
+            });
+
+            assert.equal(merged.length, 1);
+            assert.equal(merged[0].status, 'disputed');
+            assert.equal(merged[0].confidence, 0.5);
+        });
+
         it('sorts by severity (highest first)', () => {
             const findings = [
                 { dedupeKey: 'f1', severity: 'low', title: 'Low', agentId: 'codex' },

@@ -34,6 +34,12 @@ import { McpCodexAdapter } from './mcp-adapter.js';
 /** @type {Map<string, BaseAdapter>} */
 const registry = new Map();
 
+const SHARED_REVIEW_TIMEOUTS = Object.freeze({
+    firstByteMs: 90_000,
+    idleMs: 120_000,
+    hardMs: 360_000,
+});
+
 /**
  * Register a built-in adapter instance directly.
  * @param {BaseAdapter} adapter
@@ -49,8 +55,9 @@ function registerBuiltin(adapter) {
 
 // ── Pre-register built-in adapters ───────────────────
 
-registerBuiltin(new CodexAdapter());
-registerBuiltin(new ClaudeCodeAdapter());
+// LLM agents need longer idle+hard timeouts than CLI tools — they "think" silently
+registerBuiltin(new CodexAdapter(SHARED_REVIEW_TIMEOUTS));
+registerBuiltin(new ClaudeCodeAdapter(SHARED_REVIEW_TIMEOUTS));
 registerBuiltin(new McpCodexAdapter());
 
 // ── Public API ───────────────────────────────────────
@@ -142,8 +149,8 @@ export function unregisterAdapter(agentId) {
  */
 export function resetRegistry() {
     registry.clear();
-    registerBuiltin(new CodexAdapter());
-    registerBuiltin(new ClaudeCodeAdapter());
+    registerBuiltin(new CodexAdapter(SHARED_REVIEW_TIMEOUTS));
+    registerBuiltin(new ClaudeCodeAdapter(SHARED_REVIEW_TIMEOUTS));
     registerBuiltin(new McpCodexAdapter());
 }
 

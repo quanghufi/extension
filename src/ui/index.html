@@ -869,7 +869,9 @@
         }
 
         function renderFindings(session) {
-            const findings = session.groupedFindings || [];
+            const findings = (session.mergedFindings && session.mergedFindings.length > 0)
+                ? session.mergedFindings
+                : (session.groupedFindings || []);
             $findingCount.textContent = findings.length;
 
             if (findings.length === 0) {
@@ -882,14 +884,24 @@
             html += '</tr></thead><tbody>';
 
             for (const group of findings) {
-                const f = group.finding;
-                const agentBadges = group.agents.map(a =>
+                const f = group.finding || group;
+                const agentBadges = (group.agents || []).map(a =>
                     `<span class="agent-badge ${escapeHtml(a)}">${escapeHtml(a)}</span>`
                 ).join('');
+                const details = [];
+                if (f.why_it_matters) {
+                    details.push(`<div style="margin-top: 6px; color: var(--text-dim);"><strong style="color: var(--text);">Why:</strong> ${escapeHtml(f.why_it_matters)}</div>`);
+                }
+                if (f.fix_instructions) {
+                    details.push(`<div style="margin-top: 6px; color: var(--text-dim);"><strong style="color: var(--text);">Fix:</strong> ${escapeHtml(f.fix_instructions)}</div>`);
+                }
+                if (f.evidence) {
+                    details.push(`<div style="margin-top: 6px; color: var(--text-dim);"><strong style="color: var(--text);">Evidence:</strong> ${escapeHtml(f.evidence)}</div>`);
+                }
 
                 html += `<tr>
                     <td><span class="severity-dot ${escapeHtml(f.severity)}"></span>${escapeHtml(f.severity)}</td>
-                    <td>${escapeHtml(f.summary)}</td>
+                    <td><div>${escapeHtml(f.summary)}</div>${details.join('')}</td>
                     <td style="font-family: monospace; font-size: 12px;">${escapeHtml(f.file)}</td>
                     <td>${escapeHtml(f.line ?? '—')}</td>
                     <td><div class="agent-badges">${agentBadges}</div></td>

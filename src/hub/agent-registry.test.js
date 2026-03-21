@@ -50,6 +50,30 @@ describe('AgentRegistry', () => {
         assert.equal(reg.get('codex')?.state, 'running');
     });
 
+    it('valid transition: completed → running for another debate pass', () => {
+        const reg = new AgentRegistry();
+        reg.register('codex');
+        reg.transition('codex', 'running', { startedAt: '2026-01-01T00:00:00Z' });
+        reg.transition('codex', 'completed', {
+            completedAt: '2026-01-01T00:01:00Z',
+            status: 'ok',
+            findingCount: 2,
+        });
+
+        reg.transition('codex', 'running', {
+            startedAt: '2026-01-01T00:02:00Z',
+            completedAt: null,
+            status: null,
+            findingCount: 0,
+        });
+
+        assert.equal(reg.get('codex')?.state, 'running');
+        assert.equal(reg.get('codex')?.startedAt, '2026-01-01T00:02:00Z');
+        assert.equal(reg.get('codex')?.completedAt, null);
+        assert.equal(reg.get('codex')?.status, null);
+        assert.equal(reg.get('codex')?.findingCount, 0);
+    });
+
     it('invalid transition: pending → completed throws InvalidTransitionError', () => {
         const reg = new AgentRegistry();
         reg.register('codex');
@@ -65,13 +89,13 @@ describe('AgentRegistry', () => {
         );
     });
 
-    it('invalid transition: completed → running throws InvalidTransitionError', () => {
+    it('invalid transition: completed → pending throws InvalidTransitionError', () => {
         const reg = new AgentRegistry();
         reg.register('codex');
         reg.transition('codex', 'running');
         reg.transition('codex', 'completed');
         assert.throws(
-            () => reg.transition('codex', 'running'),
+            () => reg.transition('codex', 'pending'),
             InvalidTransitionError,
         );
     });

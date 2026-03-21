@@ -30,6 +30,13 @@ describe('Built-in adapters', () => {
         const ids = listAdapters();
         assert.ok(ids.includes('codex'));
     });
+
+    it('registers claude-code with the same timeout profile as codex', () => {
+        const codex = getAdapter('codex');
+        const claude = getAdapter('claude-code');
+
+        assert.deepEqual(claude.timeouts, codex.timeouts);
+    });
 });
 
 // ── Registration ─────────────────────────────────────

@@ -91,7 +91,7 @@ describe('session-collab-integration', () => {
             assert.equal(session.messages.length, 1);
 
             // Step 4: Codex advances → Antigravity's turn
-            const advance1 = session.advanceCollabState('review_complete', 'codex');
+            const advance1 = session.advanceCollabState('review_complete', 'codex', { turnToken: codexToken });
             assert.equal(advance1.previousState, 'codex_reviewing');
             assert.equal(advance1.nextState, 'awaiting_antigravity_turn');
             assert.equal(session.collabState, 'awaiting_antigravity_turn');
@@ -114,7 +114,7 @@ describe('session-collab-integration', () => {
             assert.equal(session.messages.length, 2);
 
             // Step 7: Antigravity advances → review complete
-            const advance2 = session.advanceCollabState('review_complete', 'antigravity');
+            const advance2 = session.advanceCollabState('review_complete', 'antigravity', { turnToken: agToken });
             assert.equal(advance2.nextState, 'awaiting_resolution');
 
             // Step 8: Decider (antigravity) advances → resolve

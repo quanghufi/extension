@@ -193,7 +193,12 @@ export class Session {
 
         const payload = /** @type {Record<string, unknown>} */ (event.payload);
         if (payload.state === 'started') {
-            this.agents.transition(agentId, 'running', { startedAt: event.timestamp });
+            this.agents.transition(agentId, 'running', {
+                startedAt: event.timestamp,
+                completedAt: null,
+                status: null,
+                findingCount: 0,
+            });
             return;
         }
 

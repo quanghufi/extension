@@ -102,6 +102,16 @@ export class SessionStore {
     }
 
     /**
+     * Get the persisted file path for a session ID.
+     * The path is returned whether or not the file exists yet.
+     * @param {string} sessionId
+     * @returns {string}
+     */
+    getPath(sessionId) {
+        return this._sessionPath(sessionId);
+    }
+
+    /**
      * @param {string} sessionId
      * @returns {string}
      */

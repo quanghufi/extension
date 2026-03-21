@@ -25,9 +25,10 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { HubServer } from './server.js';
 import { Session } from './hub/session.js';
 import { isCollabTurnBased } from './hub/session-collab.js';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { registerCollabTools } from './mcp-collab-tools.js';
+import { registerCollabTools, startDebateInBackground, validateDebateRequest } from './mcp-collab-tools.js';
 
 // ── Constants ────────────────────────────────────────
 
@@ -63,6 +64,98 @@ function createMcpResult(text) {
 }
 
 /**
+ * @param {HubServer} server
+ * @param {string} sessionId
+ * @returns {{ persisted: boolean, storePath: string, activeInMemory: boolean }}
+ */
+function getSessionStorageMetadata(server, sessionId) {
+    return {
+        persisted: server.store.exists(sessionId),
+        storePath: server.store.getPath(sessionId),
+        activeInMemory: server.activeSessions.has(sessionId),
+    };
+}
+
+/**
+ * @param {HubServer} server
+ * @param {string} sessionId
+ * @returns {{ persisted: true, storePath: string, activeInMemory: boolean }}
+ */
+function requirePersistedSession(server, sessionId) {
+    const storage = getSessionStorageMetadata(server, sessionId);
+    if (!storage.persisted) {
+        throw new Error(`Session ${sessionId} was not persisted to disk at ${storage.storePath}`);
+    }
+    return {
+        persisted: true,
+        storePath: storage.storePath,
+        activeInMemory: storage.activeInMemory,
+    };
+}
+
+/**
+ * @param {HubServer} server
+ * @param {{ projectDir: string, prompt?: string, agentId?: string, reviewTarget?: string, filePath?: string, maxFindings?: number }} args
+ * @returns {Session}
+ */
+function createReviewSession(server, args) {
+    const reviewTarget = args.reviewTarget ?? 'uncommitted';
+    const filePath = args.filePath;
+    const prompt = normalizeReviewPrompt({
+        prompt: args.prompt,
+        reviewTarget,
+        filePath,
+    });
+
+    const session = new Session({
+        projectDir: args.projectDir,
+        prompt,
+        agentId: args.agentId ?? 'codex',
+        reviewOptions: {
+            review_target: reviewTarget,
+            file_path: filePath,
+            max_findings: args.maxFindings ?? 10,
+        },
+    });
+
+    server.activeSessions.set(session.id, session);
+    server.store.save(session);
+    requirePersistedSession(server, session.id);
+    return session;
+}
+
+/**
+ * @param {{ reviewTarget?: string, filePath?: string }} args
+ * @returns {string|null}
+ */
+function validateReviewScopeArgs(args) {
+    if (args.filePath && args.reviewTarget !== 'file') {
+        return 'filePath requires reviewTarget="file" for file-scoped review.';
+    }
+    return null;
+}
+
+/**
+ * @param {{ prompt?: string, reviewTarget: string, filePath?: string }} args
+ * @returns {string}
+ */
+function normalizeReviewPrompt(args) {
+    const basePrompt = args.prompt?.trim() || 'Review this code for bugs and issues';
+    if (args.reviewTarget !== 'file' || !args.filePath) {
+        return basePrompt;
+    }
+
+    const fileLead = `Review only ${args.filePath}. Stay focused on this file.`;
+    const normalizedBase = basePrompt.toLowerCase();
+    if (normalizedBase.includes(`review only ${args.filePath.toLowerCase()}`)) {
+        return normalizedBase.includes('stay focused on this file')
+            ? basePrompt
+            : `${basePrompt} Stay focused on this file.`;
+    }
+    return `${fileLead} ${basePrompt}`;
+}
+
+/**
  * @param {import('./hub/session.js').Session} session
  * @param {string} toolName
  */
@@ -95,58 +188,149 @@ class HubManager {
         /** @type {typeof STATES[keyof typeof STATES]} */
         this.state = STATES.IDLE;
 
-        /** @type {HubServer | null} */
-        this._hub = null;
+        /** @type {Map<string, HubServer>} */
+        this._hubs = new Map();
 
         /** @type {string | null} */
         this._lastError = null;
 
-        /** @type {Promise<HubServer> | null} */
-        this._startPromise = null;
+        /** @type {Map<string, Promise<HubServer>>} */
+        this._startPromises = new Map();
+
+        /** @type {Map<string, string>} */
+        this._sessionOwners = new Map();
+    }
+
+    /**
+     * @param {string} projectDir
+     * @returns {{ projectDir: string, dataDir: string, snapshotDir: string }}
+     */
+    getProjectConfig(projectDir) {
+        if (typeof projectDir !== 'string' || projectDir.trim() === '') {
+            throw new Error('projectDir is required to initialize a Hub server');
+        }
+
+        const normalized = path.resolve(projectDir);
+        return {
+            projectDir: normalized,
+            dataDir: path.join(normalized, 'data'),
+            snapshotDir: path.join(normalized, 'tmp', 'snapshots'),
+        };
+    }
+
+    /**
+     * @param {string} sessionId
+     * @param {string} projectDir
+     */
+    trackSession(sessionId, projectDir) {
+        const { projectDir: normalized } = this.getProjectConfig(projectDir);
+        this._sessionOwners.set(sessionId, normalized);
     }
 
     /**
      * Ensure Hub is started and ready. Lazy-initializes on first call.
      * Concurrent callers share the same startup promise to prevent races.
+     * @param {string} projectDir
      * @returns {Promise<HubServer>}
      */
-    async ensureReady() {
-        if (this.state === STATES.READY && this._hub) {
-            return this._hub;
+    async ensureReady(projectDir) {
+        const config = this.getProjectConfig(projectDir);
+
+        const existing = this._hubs.get(config.projectDir);
+        if (existing) {
+            this.state = STATES.READY;
+            return existing;
         }
 
-        // Memoize startup — concurrent callers share the same promise
-        if (this._startPromise) {
-            return this._startPromise;
+        const existingPromise = this._startPromises.get(config.projectDir);
+        if (existingPromise) {
+            return existingPromise;
         }
 
         this.state = STATES.STARTING;
-        this._startPromise = (async () => {
+        const startPromise = (async () => {
             try {
-                this._hub = new HubServer({ port: 0 }); // random port
-                await this._hub.start();
+                const server = new HubServer({
+                    port: 0,
+                    dataDir: config.dataDir,
+                    snapshotDir: config.snapshotDir,
+                });
+                await server.start();
+                this._hubs.set(config.projectDir, server);
                 this.state = STATES.READY;
                 this._lastError = null;
-                return this._hub;
+                this._startPromises.delete(config.projectDir);
+                return server;
             } catch (err) {
                 this._lastError = err instanceof Error ? err.message : String(err);
                 this.state = STATES.ERROR;
-                this._startPromise = null; // allow retry on next call
+                this._startPromises.delete(config.projectDir);
                 throw err;
             }
         })();
 
-        return this._startPromise;
+        this._startPromises.set(config.projectDir, startPromise);
+        return startPromise;
     }
 
     /**
-     * Get session from active or stored sessions.
+     * Get session from active or stored sessions, along with its owning server.
+     * @param {string} sessionId
+     * @returns {{ server: HubServer, session: import('./hub/session.js').Session, projectDir: string } | null}
+     */
+    getSessionRecord(sessionId) {
+        const ownerProject = this._sessionOwners.get(sessionId);
+        if (ownerProject) {
+            const ownerHub = this._hubs.get(ownerProject);
+            if (ownerHub) {
+                const ownerSession = ownerHub.activeSessions.get(sessionId) ?? ownerHub.store.load(sessionId);
+                if (ownerSession) {
+                    return { server: ownerHub, session: ownerSession, projectDir: ownerProject };
+                }
+            }
+            this._sessionOwners.delete(sessionId);
+        }
+
+        for (const [projectDir, server] of this._hubs.entries()) {
+            const session = server.activeSessions.get(sessionId) ?? server.store.load(sessionId);
+            if (session) {
+                this._sessionOwners.set(sessionId, projectDir);
+                return { server, session, projectDir };
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * @param {string} sessionId
      * @returns {import('./hub/session.js').Session | null}
      */
     getSession(sessionId) {
-        if (!this._hub) return null;
-        return this._hub.activeSessions.get(sessionId) ?? this._hub.store.load(sessionId);
+        return this.getSessionRecord(sessionId)?.session ?? null;
+    }
+
+    /**
+     * @returns {Array<ReturnType<import('./hub/session.js').Session['toSummaryJSON']>>}
+     */
+    listSessions() {
+        const sessions = [];
+
+        for (const server of this._hubs.values()) {
+            const ids = server.store.list();
+            for (const id of ids) {
+                const active = server.activeSessions.get(id);
+                const session = active ?? server.store.load(id);
+                if (session) {
+                    this._sessionOwners.set(id, path.resolve(session.projectDir));
+                    sessions.push(session.toSummaryJSON());
+                } else {
+                    sessions.push({ id, state: 'unknown' });
+                }
+            }
+        }
+
+        return sessions;
     }
 
     /**
@@ -155,16 +339,17 @@ class HubManager {
      * @returns {Promise<void>}
      */
     async shutdown() {
-        this._startPromise = null;
+        this._startPromises.clear();
+        this._sessionOwners.clear();
         this.state = STATES.IDLE;
 
-        if (!this._hub) {
+        if (this._hubs.size === 0) {
             return;
         }
 
-        const hub = this._hub;
-        this._hub = null;
-        await hub.stop();
+        const hubs = [...this._hubs.values()];
+        this._hubs.clear();
+        await Promise.all(hubs.map((hub) => hub.stop()));
     }
 
     /**
@@ -178,8 +363,9 @@ class HubManager {
     async waitForCompletion(sessionId, timeoutMs = 720_000) {
         const start = Date.now();
         while (Date.now() - start < timeoutMs) {
-            const session = this.getSession(sessionId);
-            if (!session) throw new Error(`Session ${sessionId} not found`);
+            const record = this.getSessionRecord(sessionId);
+            if (!record) throw new Error(`Session ${sessionId} not found`);
+            const { session } = record;
 
             if (['completed', 'failed', 'timeout', 'cancelled'].includes(session.state)) {
                 return session;
@@ -218,14 +404,7 @@ function buildMcpServer() {
         'hub_list_sessions',
         'List all review sessions with their current status',
         async () => {
-            const server = await hub.ensureReady();
-            const ids = server.store.list();
-            const sessions = ids.map((id) => {
-                const active = server.activeSessions.get(id);
-                if (active) return active.toSummaryJSON();
-                const stored = server.store.load(id);
-                return stored ? stored.toSummaryJSON() : { id, state: 'unknown' };
-            });
+            const sessions = hub.listSessions();
             return {
                 content: [{
                     type: /** @type {const} */ ('text'),
@@ -242,31 +421,25 @@ function buildMcpServer() {
         'Create a new code review session and start the review process',
         {
             projectDir: z.string().describe('Project directory to review'),
-            prompt: z.string().optional().describe('Review instructions/prompt'),
-            agentId: z.string().optional().describe('Agent ID (default: mcp-codex)'),
-            reviewTarget: z.string().optional().describe('Review target: uncommitted, staged, or file path'),
-            filePath: z.string().optional().describe('Specific file to review'),
+            prompt: z.string().optional().describe('Review instructions/prompt. For single-file review, start with "Review only <filePath>" and keep scope anchored to that file.'),
+            agentId: z.string().optional().describe('Agent ID (default: codex)'),
+            reviewTarget: z.string().optional().describe('Review target. Must be "file" when filePath is provided.'),
+            filePath: z.string().optional().describe('Specific file to review. Required when reviewing a single file.'),
             maxFindings: z.number().optional().describe('Max findings to return (default: 10)'),
             waitForCompletion: z.boolean().optional().describe('Wait for review to complete before returning (default: false)'),
         },
         async (args) => {
-            const server = await hub.ensureReady();
+            const server = await hub.ensureReady(args.projectDir);
             hub.state = STATES.BUSY;
 
             try {
-                const session = new Session({
-                    projectDir: args.projectDir,
-                    prompt: args.prompt ?? 'Review this code for bugs and issues',
-                    agentId: args.agentId ?? 'mcp-codex',
-                    reviewOptions: {
-                        review_target: args.reviewTarget ?? 'uncommitted',
-                        file_path: args.filePath,
-                        max_findings: args.maxFindings ?? 10,
-                    },
-                });
-
-                server.activeSessions.set(session.id, session);
-                server.store.save(session);
+                const invalidArgs = validateReviewScopeArgs(args);
+                if (invalidArgs) {
+                    hub.state = STATES.READY;
+                    return createMcpError(invalidArgs);
+                }
+                const session = createReviewSession(server, args);
+                hub.trackSession(session.id, session.projectDir);
 
                 // Start review in background
                 server.runSession(session.id).catch((err) => {
@@ -317,23 +490,123 @@ function buildMcpServer() {
     // ── Tool: hub_get_status ─────────────────────────
 
     mcpServer.tool(
+        'hub_create_review_and_start_dual_debate',
+        'Create a new review session, wait for completion, then start a mandatory dual-agent debate with codex and claude-code',
+        {
+            projectDir: z.string().describe('Project directory to review'),
+            prompt: z.string().optional().describe('Review instructions/prompt. For single-file review, start with "Review only <filePath>" and keep scope anchored to that file.'),
+            agentId: z.string().optional().describe('Review agent ID (default: codex)'),
+            reviewTarget: z.string().optional().describe('Review target. Must be "file" when filePath is provided.'),
+            filePath: z.string().optional().describe('Specific file to review. Required when reviewing a single file.'),
+            maxFindings: z.number().optional().describe('Max findings to return from the review (default: 10)'),
+            maxRounds: z.number().optional().describe('Maximum debate rounds (default: 3)'),
+            consensusThreshold: z.number().optional().describe('Agreement threshold 0.0-1.0 (default: 0.7)'),
+        },
+        async (args) => {
+            const server = await hub.ensureReady(args.projectDir);
+            hub.state = STATES.BUSY;
+
+            try {
+                const debateAgents = ['codex', 'claude-code'];
+                const decider = 'codex';
+                const invalidReviewArgs = validateReviewScopeArgs(args);
+                if (invalidReviewArgs) {
+                    hub.state = STATES.READY;
+                    return createMcpError(invalidReviewArgs);
+                }
+                const preflightSession = new Session({
+                    projectDir: args.projectDir,
+                    prompt: normalizeReviewPrompt({
+                        prompt: args.prompt,
+                        reviewTarget: args.reviewTarget ?? 'uncommitted',
+                        filePath: args.filePath,
+                    }),
+                    agentId: args.agentId ?? 'codex',
+                });
+                preflightSession.state = 'completed';
+                const invalid = validateDebateRequest(preflightSession, {
+                    agents: debateAgents,
+                    decider,
+                    sessionId: '<new-session>',
+                });
+                if (invalid) {
+                    hub.state = STATES.READY;
+                    return invalid;
+                }
+
+                const session = createReviewSession(server, args);
+                hub.trackSession(session.id, session.projectDir);
+                server.runSession(session.id).catch((err) => {
+                    console.error(`[MCP] runSession error for ${session.id}:`, err);
+                });
+
+                const completed = await hub.waitForCompletion(session.id);
+                const completedSession = server.activeSessions.get(completed.id) ?? server.store.load(completed.id);
+                if (!completedSession) {
+                    hub.state = STATES.READY;
+                    return createMcpError(`Session ${completed.id} disappeared before debate could start`);
+                }
+                const storage = requirePersistedSession(server, completed.id);
+
+                const invalidAfterReview = validateDebateRequest(completedSession, {
+                    agents: debateAgents,
+                    decider,
+                    sessionId: completed.id,
+                });
+                if (invalidAfterReview) {
+                    hub.state = STATES.READY;
+                    return invalidAfterReview;
+                }
+
+                startDebateInBackground(server, completed.id, {
+                    agents: debateAgents,
+                    maxRounds: args.maxRounds,
+                    decider,
+                    consensusThreshold: args.consensusThreshold,
+                });
+
+                hub.state = STATES.READY;
+                return createMcpResult(JSON.stringify({
+                    sessionId: completed.id,
+                    reviewState: completed.state,
+                    findingCount: completed.allFindings.length,
+                    debateState: 'starting',
+                    debateRound: completedSession.debateRound,
+                    debateActive: true,
+                    agents: debateAgents,
+                    storage,
+                    maxRounds: args.maxRounds ?? 3,
+                    decider,
+                    consensusThreshold: args.consensusThreshold ?? 0.7,
+                    message: 'Review completed and dual-agent debate started on the same session.',
+                }, null, 2));
+            } catch (err) {
+                hub.state = STATES.READY;
+                return createMcpError(`Error: ${err instanceof Error ? err.message : String(err)}`);
+            }
+        },
+    );
+
+    mcpServer.tool(
         'hub_get_status',
-        'Get detailed status and metadata for a review session',
+        'Get detailed status and metadata for a review session, including whether it is persisted on disk and active in memory',
         {
             sessionId: z.string().describe('Session UUID'),
         },
         async (args) => {
-            await hub.ensureReady();
-            const session = hub.getSession(args.sessionId);
-            if (!session) {
+            const record = hub.getSessionRecord(args.sessionId);
+            if (!record) {
                 return createMcpError(`Session ${args.sessionId} not found`);
             }
+            const { server, session } = record;
+            const storage = getSessionStorageMetadata(server, args.sessionId);
 
             return {
                 content: [{
                     type: /** @type {const} */ ('text'),
                     text: JSON.stringify({
                         ...session.toJSON(),
+                        storage,
                         watchdog: session.getWatchdogStatus(),
                         // Collaboration fields
                         collabState: session.collabState,
@@ -361,14 +634,14 @@ function buildMcpServer() {
             sessionId: z.string().describe('Session UUID'),
         },
         async (args) => {
-            await hub.ensureReady();
-            const session = hub.getSession(args.sessionId);
-            if (!session) {
+            const record = hub.getSessionRecord(args.sessionId);
+            if (!record) {
                 return {
                     content: [{ type: /** @type {const} */ ('text'), text: `Session ${args.sessionId} not found` }],
                     isError: true,
                 };
             }
+            const { session } = record;
 
             return {
                 content: [{
@@ -400,14 +673,14 @@ function buildMcpServer() {
             })).describe('Array of finding evaluations'),
         },
         async (args) => {
-            await hub.ensureReady();
-            const session = hub.getSession(args.sessionId);
-            if (!session) {
+            const record = hub.getSessionRecord(args.sessionId);
+            if (!record) {
                 return {
                     content: [{ type: /** @type {const} */ ('text'), text: `Session ${args.sessionId} not found` }],
                     isError: true,
                 };
             }
+            const { server, session } = record;
 
             // Collab path enforcement: block legacy evaluate when collab is active
             const evalBlock = getLegacyToolBlock(session, "hub_evaluate_findings");
@@ -427,7 +700,6 @@ function buildMcpServer() {
                 session.evaluations.push(...rebuttals);
 
                 // Persist to store so evaluations survive restarts
-                const server = await hub.ensureReady();
                 server.store.save(session);
 
                 return {
@@ -456,11 +728,11 @@ function buildMcpServer() {
             waitForCompletion: z.boolean().optional().describe('Wait for review to complete'),
         },
         async (args) => {
-            const server = await hub.ensureReady();
-            const session = hub.getSession(args.sessionId);
-            if (!session) {
+            const record = hub.getSessionRecord(args.sessionId);
+            if (!record) {
                 return createMcpError(`Session ${args.sessionId} not found`);
             }
+            const { server, session } = record;
 
             const blocked = getLegacyToolBlock(session, 'hub_rerun_review');
             if (blocked) {
@@ -483,6 +755,7 @@ function buildMcpServer() {
 
                 server.activeSessions.set(retry.id, retry);
                 server.store.save(retry);
+                hub.trackSession(retry.id, retry.projectDir);
 
                 server.runSession(retry.id).catch((err) => {
                     console.error(`[MCP] rerun error for ${retry.id}:`, err);

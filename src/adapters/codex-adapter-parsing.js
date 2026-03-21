@@ -2,7 +2,7 @@
 /**
  * Codex adapter prompt + JSONL parsing helpers.
  *
- * Supports Codex CLI v0.112+ `codex exec review --json` output.
+ * Supports Codex CLI v0.112+ `codex exec --json` output.
  *
  * @module adapters/codex-adapter-parsing
  */
@@ -26,9 +26,16 @@ export function formatReviewPrompt(prompt) {
     return [
         prompt.trim(),
         '',
-        'Return the final answer as a JSON array only.',
-        'Each item must be an object with: summary, severity, file, line, evidence, fix_instructions, why_it_matters, confidence.',
+        'Review the requested code scope directly.',
+        'You may inspect other files only if needed to verify a concrete interaction or call site.',
+        'Do not inspect git diff, git history, or unrelated files unless the prompt explicitly asks for that.',
+        'Report only findings supported by the code you actually inspected.',
+        '',
+        'Return the final answer as a JSON object.',
+        'The object must have keys: status, summary, findings, fix_plan, rerun_review.',
+        'Each finding in findings must have: severity, title, why_it_matters, file, line, fix_instructions, confidence.',
         'Use severity from: critical, high, medium, low.',
+        'Use confidence from: high, medium, low.',
         'Use null for unknown line numbers. Use "unknown" for unknown files.',
         'Do not wrap the JSON in markdown fences.',
     ].join('\n');
@@ -184,10 +191,6 @@ function extractAgentMessageText(parsed) {
  */
 function parseFindingsFromAgentMessage(text) {
     const normalized = text.trim();
-    if (!normalized.startsWith('[')) {
-        return [];
-    }
-
     let parsed;
     try {
         parsed = JSON.parse(normalized);
@@ -195,11 +198,17 @@ function parseFindingsFromAgentMessage(text) {
         return [];
     }
 
-    if (!Array.isArray(parsed)) {
+    const items = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed?.findings)
+            ? parsed.findings
+            : null;
+
+    if (!items) {
         return [];
     }
 
-    return parsed
+    return items
         .map((item) => normalizeFinding(item))
         .filter(Boolean);
 }
@@ -215,12 +224,12 @@ function normalizeFinding(item) {
         return null;
     }
 
-    const confidence = Math.max(0, Math.min(1, typeof item.confidence === 'number' ? item.confidence : 0.5));
+    const confidence = normalizeConfidence(item.confidence);
 
     return createFinding({
         severity: mapSeverity(item.severity ?? 'medium'),
         summary,
-        evidence: item.evidence ?? item.why_it_matters ?? item.fix_instructions ?? '',
+        evidence: item.evidence ?? item.body ?? item.why_it_matters ?? item.fix_instructions ?? '',
         file: item.file ?? 'unknown',
         line: typeof item.line === 'number' ? item.line : null,
         confidence,
@@ -241,4 +250,20 @@ export function mapSeverity(severity) {
     if (['medium', 'info', 'note'].includes(s)) return 'medium';
     if (['low', 'hint', 'suggestion'].includes(s)) return 'low';
     return 'medium';
+}
+
+/**
+ * @param {unknown} confidence
+ * @returns {number}
+ */
+function normalizeConfidence(confidence) {
+    if (typeof confidence === 'number') {
+        return Math.max(0, Math.min(1, confidence));
+    }
+
+    const normalized = String(confidence ?? '').toLowerCase();
+    if (normalized === 'high') return 0.9;
+    if (normalized === 'medium') return 0.6;
+    if (normalized === 'low') return 0.3;
+    return 0.5;
 }

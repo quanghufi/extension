@@ -46,7 +46,7 @@ export async function apiCreateSession(server, req, res) {
         const session = new Session({
             projectDir: data.projectDir ?? process.cwd(),
             prompt: data.prompt ?? 'Review this code for bugs and issues',
-            agentId: data.agentId ?? 'mcp-codex',
+            agentId: data.agentId ?? 'codex',
             snapshotPath: data.snapshotPath,
             reviewOptions: data.reviewOptions,
             label: data.label ?? null,
@@ -130,6 +130,8 @@ export function apiGetFindings(server, id, res) {
     jsonResponse(res, 200, {
         grouped: session.groupedFindings,
         merged: session.mergedFindings,
+        resolved: session.mergedFindings,
+        finalFindings: session.allFindings,
         mergeStats: session.mergeStats,
         totalRaw: session.allFindings.length,
         rebuttals: session.rebuttals,

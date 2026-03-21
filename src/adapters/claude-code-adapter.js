@@ -19,16 +19,12 @@ import {
     mapSeverity,
 } from './claude-code-parsing.js';
 
-// ── Constants ────────────────────────────────────────
-
-/** Claude Code review takes 5-8 minutes (similar to Codex) — generous timeouts */
+/** Claude Code must match Codex review timeouts in debate runs. */
 const CLAUDE_TIMEOUTS = Object.freeze({
-    firstByteMs: 300_000,  // 5min — Claude reads & analyzes code before first output
-    idleMs: 60_000,        // 60s — may pause between reasoning chunks
-    hardMs: 600_000,       // 10min hard cap for full review
+    firstByteMs: 90_000,
+    idleMs: 120_000,
+    hardMs: 360_000,
 });
-
-// ── Claude Code Adapter ─────────────────────────────
 
 export class ClaudeCodeAdapter extends BaseAdapter {
     /**
@@ -48,32 +44,32 @@ export class ClaudeCodeAdapter extends BaseAdapter {
     /**
      * Build the Claude Code CLI command.
      *
-     * @param {string} snapshotPath - Path to code snapshot
-     * @param {string} prompt - Review prompt
-     * @returns {{ cmd: string, args: string[] }}
+     * @param {string} _snapshotPath
+     * @param {string} prompt
+     * @returns {{ cmd: string, args: string[], stdinText: string }}
      */
-    buildCommand(snapshotPath, prompt) {
+    buildCommand(_snapshotPath, prompt) {
         const reviewPrompt = buildReviewPrompt(prompt);
         return {
             cmd: 'claude',
             args: [
-                '-p', reviewPrompt,
+                '-p', '-',
                 '--output-format', 'stream-json',
                 '--verbose',
             ],
+            stdinText: reviewPrompt,
         };
     }
 
     /**
      * Parse a chunk of Claude Code stream-json output.
      *
-     * @param {string} chunk - Raw output chunk (may contain multiple NDJSON lines)
-     * @param {string} sessionId - Current session ID
+     * @param {string} chunk
+     * @param {string} sessionId
      * @returns {import('../schema/events.js').Event[]}
      */
     parseChunk(chunk, sessionId) {
         const events = [];
-        // Split chunk into individual NDJSON lines
         const lines = chunk.split('\n');
         for (const line of lines) {
             const lineEvents = parseStreamLine(line, sessionId, this.agentId);
@@ -85,8 +81,8 @@ export class ClaudeCodeAdapter extends BaseAdapter {
     /**
      * Parse accumulated output into final Findings.
      *
-     * @param {string} allOutput - All concatenated output
-     * @param {string} sessionId - Current session ID
+     * @param {string} allOutput
+     * @param {string} sessionId
      * @returns {import('../schema/events.js').Finding[]}
      */
     parseResult(allOutput, sessionId) {
@@ -94,17 +90,14 @@ export class ClaudeCodeAdapter extends BaseAdapter {
     }
 
     /**
-     * Execution options — set cwd to snapshot path.
+     * Execution options.
      *
-     * @param {string} snapshotPath - Path to code snapshot
+     * @param {string} _snapshotPath
      * @returns {{ env?: Record<string, string> }}
      */
-    getExecutionOptions(snapshotPath) {
+    getExecutionOptions(_snapshotPath) {
         return {
-            env: {
-                // Claude Code CLI needs to operate within the snapshot directory
-                // Note: cwd is handled by adapter-execution.js via snapshotPath
-            },
+            env: {},
         };
     }
 }

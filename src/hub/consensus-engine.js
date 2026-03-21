@@ -193,14 +193,15 @@ export class ConsensusEngine {
      * Disputed findings use severity resolution: higher severity wins.
      * Dropped findings are excluded.
      *
-     * @param {FindingEntry[]} allFindings
-     * @param {EvaluationEntry[]} evaluations
-     * @param {{ decider?: string }} [options]
-     * @returns {MergedFinding[]}
-     */
+ * @param {FindingEntry[]} allFindings
+ * @param {EvaluationEntry[]} evaluations
+ * @param {{ decider?: string, policy?: 'strict'|'soft_union' }} [options]
+ * @returns {MergedFinding[]}
+ */
     mergeFinalFindings(allFindings, evaluations, options = {}) {
         const normalizedFindings = normalizeFindings(allFindings);
         const { agreed, disputed } = this.calculateAgreement(normalizedFindings, evaluations);
+        const policy = options.policy ?? 'strict';
 
         /** @type {MergedFinding[]} */
         const merged = [];
@@ -231,8 +232,10 @@ export class ConsensusEngine {
                 const deciderEval = evalsForThis.find(e => e.agentId === options.decider);
                 if (deciderEval) {
                     if (deciderEval.verdict === 'rejected') {
-                        // Decider rejected → treat as dropped
-                        continue;
+                        if (policy === 'strict' || accepted === 0) {
+                            // Strict mode treats decider rejection as final.
+                            continue;
+                        }
                     }
                 }
             }

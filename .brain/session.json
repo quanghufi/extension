@@ -1,18 +1,12 @@
 {
-  "updated_at": "2026-03-20T22:08:00+07:00",
+  "updated_at": "2026-03-21T13:48:00+07:00",
   "working_on": {
-    "feature": "Debate Findings Fix",
-    "task": "All 7 actionable debate findings fixed (P0-P3). E2E dry-run verified.",
-    "status": "completed",
-    "files": [
-      "src/server.js",
-      "src/mcp-collab-tools.js",
-      "src/collab-routes.js",
-      "src/hub/session.js",
-      "scripts/e2e-test.js"
-    ],
+    "feature": "Multi-Agent Debate System",
+    "task": "Debate system verified with live runs. Timeout tuned, handoff cleanup done.",
+    "status": "idle",
+    "files": [],
     "blockers": [],
-    "notes": "F-597F73D3 (dead timeout profiles) deferred as low-risk. All other findings verified."
+    "notes": "System stable. Last live debate completed successfully."
   },
   "pending_tasks": [
     {
@@ -23,65 +17,116 @@
     {
       "task": "Phase 04: Code Annotation Viewer",
       "priority": "low",
-      "notes": "Deferred"
+      "notes": "Spec reviewed by Codex. File viewer with syntax highlighting, IDE links, XSS safety."
     },
     {
       "task": "Phase 05: Resilient Sessions",
       "priority": "low",
-      "notes": "Deferred"
+      "notes": "Persistent session state across server restarts"
     }
   ],
   "recent_changes": [
     {
+      "timestamp": "2026-03-21T11:35:00+07:00",
+      "type": "config",
+      "agent": "Antigravity",
+      "description": "Increased Claude Code agent timeout for debates — prevents premature timeout during deep analysis (reviews take 2-5 min)",
+      "conversation": "535394af-0fe1-44e4-815b-874565123ebb"
+    },
+    {
+      "timestamp": "2026-03-21T10:00:00+07:00",
+      "type": "feature",
+      "agent": "Antigravity",
+      "description": "Ran live debate with Codex + Claude Code on extension-hub.js. Cross-evaluation and consensus working.",
+      "conversation": "54986715-7ee6-4c0c-ba65-1e265bbf5517"
+    },
+    {
+      "timestamp": "2026-03-21T09:33:00+07:00",
+      "type": "refactor",
+      "agent": "Antigravity",
+      "description": "Refined handoff artifact cleanup — only latest.* files retained. Integrated into session finalization.",
+      "conversation": "1e608ee8-e39b-47c9-8eeb-df79fc35a90e"
+    },
+    {
+      "timestamp": "2026-03-21T09:08:00+07:00",
+      "type": "feature",
+      "agent": "Antigravity",
+      "description": "Ran debate with two agents (Codex + Claude Code). Validated cross-evaluation flow end-to-end.",
+      "conversation": "8f72edd4-eb00-4237-bd66-5163baa4c211"
+    },
+    {
       "timestamp": "2026-03-20T22:00:00+07:00",
       "type": "bugfix",
+      "agent": "Antigravity",
       "description": "Fixed 7 debate findings: debate_failed→failed (P0), activeSessions memory leak (P0), adapter validation (P1), turnToken passthrough (P1), REST debate gating (P2), expire state recovery (P2), shutdown wait for debates (P3)",
-      "files": [
-        "src/server.js",
-        "src/mcp-collab-tools.js",
-        "src/collab-routes.js",
-        "src/hub/session.js"
-      ]
+      "conversation": "1894b521-39ca-41a2-b1c5-9b65085669ac"
     },
     {
-      "timestamp": "2026-03-20T21:30:00+07:00",
-      "type": "bugfix",
-      "description": "Fixed stale import in e2e-test.js: ClaudeAdapter→ClaudeCodeAdapter, claude-adapter.js→claude-code-adapter.js",
-      "files": [
-        "scripts/e2e-test.js"
-      ]
+      "timestamp": "2026-03-20T20:11:00+07:00",
+      "type": "cleanup",
+      "agent": "Antigravity",
+      "description": "Deleted unused data/ and handoff/ folders. Cleaned project structure.",
+      "conversation": "6fb06f47-3106-4f64-a094-7816dd2613b4"
     },
     {
-      "timestamp": "2026-03-20T20:00:00+07:00",
+      "timestamp": "2026-03-20T18:37:00+07:00",
       "type": "review",
-      "description": "Ran debate analysis on extension-hub codebase. 8 findings identified (2 P0, 2 P1, 2 P2, 2 P3)",
-      "files": []
+      "agent": "Antigravity + Codex + Claude Code",
+      "description": "Full codebase review via both agents. Codex and Claude Code each provided findings on extension-hub code quality.",
+      "conversation": "bcb3f5a7-4563-4fcc-97ff-64e33836d648"
+    },
+    {
+      "timestamp": "2026-03-20T15:59:00+07:00",
+      "type": "deploy",
+      "agent": "Antigravity",
+      "description": "Deployed instructions from huong_dan.md to multiple machines.",
+      "conversation": "531f9f44-8b59-4694-87fa-c305b74a5e48"
+    },
+    {
+      "timestamp": "2026-03-19T20:45:00+07:00",
+      "type": "git",
+      "agent": "Antigravity",
+      "description": "Updated local repo — git pull latest changes from remote.",
+      "conversation": "d2c0f6e3-b741-47bd-b8cf-885636213e53"
     }
   ],
   "errors_encountered": [
     {
       "error": "e2e-test.js MODULE_NOT_FOUND: claude-adapter.js",
-      "solution": "File was renamed to claude-code-adapter.js with class ClaudeCodeAdapter. Updated both import path and class name.",
+      "solution": "File renamed to claude-code-adapter.js. Updated import path and class name.",
       "resolved": true
     },
     {
       "error": "server.js runDebate sets invalid state 'debate_failed'",
       "solution": "debate-state.js only has: idle/reviewing/evaluating/debating/done/failed. Changed to 'failed'.",
       "resolved": true
+    },
+    {
+      "error": "Claude Code agent timeout during debate",
+      "solution": "Increased hard timeout from 300s to 600s. Reviews take 2-5 min for deep analysis.",
+      "resolved": true
     }
   ],
   "decisions_made": [
     {
       "decision": "Fix all P0+P1 findings immediately, P2+P3 in same session",
-      "reason": "P0 bugs could cause data corruption (wrong state) and memory leaks. P1 bugs caused silent failures."
+      "reason": "P0 bugs could cause data corruption. P1 bugs caused silent failures."
     },
     {
       "decision": "Defer F-597F73D3 (dead timeout profiles)",
-      "reason": "Unused profiles exist but don't affect runtime. Low risk, can be cleaned in future refactor."
+      "reason": "Unused profiles exist but don't affect runtime. Low risk."
     },
     {
       "decision": "blockIfDebateActive on REST routes mirrors MCP gating",
-      "reason": "REST routes were unprotected while MCP tools had getDebateGatingBlock. Same protection needed for both paths."
+      "reason": "REST routes were unprotected while MCP tools had getDebateGatingBlock."
+    },
+    {
+      "decision": "Increase Claude Code timeout for debates",
+      "reason": "Default was too short. Deep analysis reviews take 2-5 minutes."
+    },
+    {
+      "decision": "Only keep latest.* in handoff artifacts",
+      "reason": "History is noise. Only latest matters for resuming work."
     }
   ]
 }

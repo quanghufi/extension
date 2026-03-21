@@ -10,6 +10,10 @@
  */
 
 import { getAdapter, hasAdapter } from '../adapters/adapter-registry.js';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { groupFindings, mergeFindingsSmart } from './finding-aggregation.js';
 import {
     isDebateTerminal,
@@ -24,12 +28,12 @@ export const DEBATE_AGENT_PROFILES = Object.freeze({
     codex: {
         reviewTimeoutMs: 360_000,
         evalTimeoutMs: 180_000,
-        rebuttalTimeoutMs: 180_000,
+        rebuttalTimeoutMs: 360_000,
     },
     'claude-code': {
-        reviewTimeoutMs: 120_000,
+        reviewTimeoutMs: 360_000,
         evalTimeoutMs: 60_000,
-        rebuttalTimeoutMs: 60_000,
+        rebuttalTimeoutMs: 360_000,
     },
 });
 
@@ -101,13 +105,145 @@ function formatDisputedFindings(disputed) {
 }
 
 /**
+ * @param {import('./session.js').Session|{ prompt?: string, reviewOptions?: Record<string, any>|null }} session
+ * @returns {{ reviewTarget: string, filePath: string|null, isFileReview: boolean, isPlanFile: boolean }}
+ */
+function getReviewScope(session) {
+    const reviewTarget = String(session.reviewOptions?.review_target ?? 'uncommitted');
+    const filePath = typeof session.reviewOptions?.file_path === 'string'
+        ? session.reviewOptions.file_path
+        : null;
+    const isFileReview = reviewTarget === 'file' && Boolean(filePath);
+    const normalizedFilePath = filePath?.toLowerCase() ?? '';
+    const isPlanFile = isFileReview && (
+        normalizedFilePath.endsWith('.md')
+        || normalizedFilePath.includes('/plan')
+        || normalizedFilePath.includes('\\plan')
+        || normalizedFilePath.includes('phase-')
+    );
+
+    return {
+        reviewTarget,
+        filePath,
+        isFileReview,
+        isPlanFile,
+    };
+}
+
+/**
+ * @param {import('./session.js').Session|{ prompt?: string, reviewOptions?: Record<string, any>|null }} session
+ * @returns {string[]}
+ */
+function buildScopeGuidance(session) {
+    const scope = getReviewScope(session);
+    if (scope.isFileReview && scope.filePath) {
+        if (scope.isPlanFile) {
+            return [
+                `Primary review target: ${scope.filePath}`,
+                'This is a document or implementation plan review, not a repository-wide bug sweep.',
+                'Review the document itself for contradictions, missing guardrails, and implementation risks.',
+                'Inspect neighboring files only if the plan explicitly depends on them.',
+                `Target file content (${scope.filePath}) is the primary evidence source.`,
+            ];
+        }
+
+        return [
+            `Primary review target: ${scope.filePath}`,
+            'This is a file-scoped review. Re-review the same target scope throughout the debate.',
+            'Review the target code itself, not the debate process around it.',
+            'Inspect directly referenced neighbors only when a disputed finding cannot be decided from the target file alone.',
+            `Target file content (${scope.filePath}) is the primary evidence source.`,
+        ];
+    }
+
+    return [
+        'This is a broad-scope review of the provided codebase snapshot.',
+        'Treat this as a repository-wide or multi-file review.',
+        'Prioritize fewer, stronger findings over speculative edge cases.',
+    ];
+}
+
+/**
+ * @param {FindingEntry[]} disputed
+ * @returns {string}
+ */
+function formatDisputedFindingsJson(disputed) {
+    return JSON.stringify(
+        disputed.map((finding) => ({
+            dedupeKey: finding.dedupeKey,
+            severity: finding.severity,
+            title: finding.title,
+            agentId: finding.agentId,
+            file: 'file' in finding ? finding.file ?? null : null,
+            line: 'line' in finding ? finding.line ?? null : null,
+            evidence: 'evidence' in finding ? finding.evidence ?? null : null,
+            why_it_matters: 'why_it_matters' in finding ? finding.why_it_matters ?? null : null,
+            fix_instructions: 'fix_instructions' in finding ? finding.fix_instructions ?? null : null,
+        })),
+        null,
+        2,
+    );
+}
+
+const FILE_REVIEW_REBUTTAL_BATCH_SIZE = 1;
+const BROAD_REVIEW_REBUTTAL_BATCH_SIZE = 2;
+
+/**
+ * @template T
+ * @param {T[]} items
+ * @param {number} batchSize
+ * @returns {T[][]}
+ */
+function chunkItems(items, batchSize) {
+    if (items.length <= batchSize) {
+        return [items];
+    }
+
+    /** @type {T[][]} */
+    const batches = [];
+    for (let index = 0; index < items.length; index += batchSize) {
+        batches.push(items.slice(index, index + batchSize));
+    }
+    return batches;
+}
+
+/**
+ * @param {FindingEntry[]} disputed
+ * @param {{ fileReview?: boolean }} [options]
+ * @returns {FindingEntry[][]}
+ */
+function splitDisputedIntoBatches(disputed, options = {}) {
+    if (disputed.length <= 1) {
+        return [disputed];
+    }
+
+    if (options.fileReview) {
+        return chunkItems(disputed, FILE_REVIEW_REBUTTAL_BATCH_SIZE);
+    }
+
+    /** @type {Map<string, FindingEntry[]>} */
+    const byFile = new Map();
+    for (const finding of disputed) {
+        const bucket = finding.file ?? `__${finding.dedupeKey}`;
+        const existing = byFile.get(bucket) ?? [];
+        existing.push(finding);
+        byFile.set(bucket, existing);
+    }
+
+    return [...byFile.values()]
+        .flatMap((group) => chunkItems(group, BROAD_REVIEW_REBUTTAL_BATCH_SIZE));
+}
+
+/**
  * @param {import('./session.js').Session} session
  * @returns {string}
  */
-function buildInitialReviewPrompt(session) {
+export function buildInitialReviewPrompt(session) {
     return [
         'You are participating in a structured multi-agent code review debate.',
-        'Review the code snapshot and return only concrete, actionable findings.',
+        ...buildScopeGuidance(session),
+        'Ignore any stale review outputs, handoff artifacts, debate transcripts, or session history unless the prompt explicitly asks for them.',
+        'This is not a review of debate artifacts or orchestration prompts.',
         'Use the normal review schema expected by your adapter.',
         '',
         'Original review prompt:',
@@ -118,30 +254,46 @@ function buildInitialReviewPrompt(session) {
 /**
  * @param {FindingEntry[]} disputed
  * @param {number} round
+ * @param {import('./session.js').Session|{ prompt?: string, reviewOptions?: Record<string, any>|null }} [session]
  * @returns {string}
  */
-function buildRebuttalPrompt(disputed, round) {
+export function buildRebuttalPrompt(disputed, round, session = {}) {
     return [
         `Debate round ${round}: reconsider only the disputed findings listed below.`,
-        'Return only the issues you still believe are valid after reconsidering the evidence.',
+        ...buildScopeGuidance(session),
+        'Re-review the same target scope. Do not broaden this into a fresh repo audit.',
+        'This is not a review of debate artifacts, prompts, or orchestration state.',
+        'The disputed findings are already included below. Do not ask for them again.',
+        'Return ONLY a JSON array containing the disputed issues you still believe are valid.',
+        'If you keep a finding, copy the exact dedupeKey from the disputed findings JSON.',
         'If you now disagree with a disputed issue, omit it from your output.',
         '',
-        'Disputed findings:',
-        formatDisputedFindings(disputed),
+        'Original review prompt:',
+        session.prompt ?? '(not provided)',
+        '',
+        'Disputed findings JSON (exact items to adjudicate):',
+        formatDisputedFindingsJson(disputed),
     ].join('\n');
 }
 
 /**
  * @param {FindingEntry[]} disputed
+ * @param {import('./session.js').Session|{ prompt?: string, reviewOptions?: Record<string, any>|null }} [session]
  * @returns {string}
  */
-function buildTieBreakPrompt(disputed) {
+export function buildTieBreakPrompt(disputed, session = {}) {
     return [
         'You are the tie-break reviewer for disputed findings.',
-        'Review only the disputed findings below and return only the issues that should survive final resolution.',
+        ...buildScopeGuidance(session),
+        'Do not audit debate artifacts, prompts, or repository instructions.',
+        'Return ONLY a JSON array containing the disputed issues that should survive final resolution.',
+        'If you keep a finding, copy the exact dedupeKey from the disputed findings JSON.',
         '',
-        'Disputed findings:',
-        formatDisputedFindings(disputed),
+        'Original review prompt:',
+        session.prompt ?? '(not provided)',
+        '',
+        'Disputed findings JSON (exact items to adjudicate):',
+        formatDisputedFindingsJson(disputed),
     ].join('\n');
 }
 
@@ -258,6 +410,7 @@ export class DebateExecutor {
      *   agentProfiles?: Record<string, { reviewTimeoutMs: number, evalTimeoutMs: number, rebuttalTimeoutMs: number }>,
      *   onSystemMessage?: (message: string) => void,
      *   onEvent?: (event: import('../schema/events.js').Event) => void,
+     *   onCheckpoint?: () => void,
      * }} options
      */
     constructor(options) {
@@ -266,6 +419,7 @@ export class DebateExecutor {
         this.agentProfiles = options.agentProfiles ?? DEBATE_AGENT_PROFILES;
         this.onSystemMessage = options.onSystemMessage ?? (() => {});
         this.onEvent = options.onEvent ?? (() => {});
+        this.onCheckpoint = options.onCheckpoint ?? (() => {});
         this.reducer = new DebateReducer({
             maxRounds: this.session.debateMaxRounds ?? 3,
         });
@@ -293,6 +447,11 @@ export class DebateExecutor {
 
         /** @type {ReturnType<ConsensusEngine['calculateAgreement']>|null} */
         this.lastAgreement = null;
+
+        /** @type {string|null} */
+        this.fileScopedWorkspace = null;
+
+        this.hasPrunedOldSandboxes = false;
     }
 
     /**
@@ -333,6 +492,7 @@ export class DebateExecutor {
         });
 
         this.onSystemMessage(`Debate initialized: agents=[${agents.join(', ')}], maxRounds=${maxRounds}, decider=${decider ?? 'N/A'}`);
+        this.onCheckpoint();
 
         return {
             debateState: 'idle',
@@ -362,6 +522,7 @@ export class DebateExecutor {
             }
 
             this.onSystemMessage(`Debate transition: ${current} → ${result.state} (event: ${event})`);
+            this.onCheckpoint();
         }
 
         return result;
@@ -417,6 +578,123 @@ export class DebateExecutor {
     }
 
     /**
+     * @param {string} agentId
+     * @param {'review'|'rebuttal'|'tie_break'} phase
+     * @returns {{ firstByteMs: number, idleMs: number, hardMs: number }|undefined}
+     */
+    getPhaseTimeouts(agentId, phase) {
+        const profile = this.agentProfiles[agentId];
+        if (!profile) {
+            return undefined;
+        }
+
+        const timeoutMs = phase === 'review'
+            ? profile.reviewTimeoutMs
+            : phase === 'rebuttal'
+                ? profile.rebuttalTimeoutMs
+                : profile.evalTimeoutMs;
+
+        return {
+            firstByteMs: timeoutMs,
+            idleMs: timeoutMs,
+            hardMs: timeoutMs,
+        };
+    }
+
+    pruneStaleSandboxDirs() {
+        if (this.hasPrunedOldSandboxes) {
+            return;
+        }
+        this.hasPrunedOldSandboxes = true;
+
+        const cutoffMs = Date.now() - (2 * 60 * 60 * 1000);
+        try {
+            const tempRoot = os.tmpdir();
+            for (const entry of fs.readdirSync(tempRoot, { withFileTypes: true })) {
+                if (!entry.isDirectory() || !entry.name.startsWith('extension-debate-file-')) {
+                    continue;
+                }
+
+                const fullPath = path.join(tempRoot, entry.name);
+                if (this.fileScopedWorkspace && path.resolve(fullPath) === path.resolve(this.fileScopedWorkspace)) {
+                    continue;
+                }
+
+                try {
+                    const stat = fs.statSync(fullPath);
+                    if (stat.mtimeMs < cutoffMs) {
+                        fs.rmSync(fullPath, { recursive: true, force: true });
+                    }
+                } catch {
+                    // Ignore stale cleanup failures — temp artifacts are best-effort only.
+                }
+            }
+        } catch {
+            // Ignore tempdir enumeration failures.
+        }
+    }
+
+    cleanupFileScopedWorkspace() {
+        if (!this.fileScopedWorkspace) {
+            return;
+        }
+
+        const workspacePath = this.fileScopedWorkspace;
+        this.fileScopedWorkspace = null;
+        try {
+            fs.rmSync(workspacePath, { recursive: true, force: true });
+        } catch {
+            // Ignore cleanup failures — temp artifacts can be pruned next run.
+        }
+    }
+
+    /**
+     * @returns {string}
+     */
+    resolveExecutionPath(agentId) {
+        const scope = getReviewScope(this.session);
+        const basePath = this.session.snapshotPath ?? this.session.projectDir;
+        if (!scope.isFileReview || !scope.filePath) {
+            return basePath;
+        }
+
+        this.pruneStaleSandboxDirs();
+
+        if (this.fileScopedWorkspace) {
+            return this.fileScopedWorkspace;
+        }
+
+        try {
+            const sourceRoot = basePath;
+            const sourceFile = path.join(sourceRoot, scope.filePath);
+            if (!fs.existsSync(sourceFile)) {
+                return basePath;
+            }
+
+            const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'extension-debate-file-'));
+            const relativeDir = path.dirname(scope.filePath);
+            const targetDir = path.join(tempRoot, relativeDir);
+            fs.mkdirSync(targetDir, { recursive: true });
+            fs.copyFileSync(sourceFile, path.join(targetDir, path.basename(sourceFile)));
+
+            // Codex CLI requires a git repository for sandboxed reviews.
+            const gitInit = spawnSync('git', ['init'], {
+                cwd: tempRoot,
+                windowsHide: true,
+                stdio: 'ignore',
+            });
+            if (gitInit.status !== 0) {
+                return basePath;
+            }
+
+            this.fileScopedWorkspace = tempRoot;
+            return tempRoot;
+        } catch {
+            return basePath;
+        }
+    }
+
+    /**
      * @param {string[]} agentIds
      * @param {{ phase: 'review'|'rebuttal'|'tie_break', prompt: string, disputedKeys?: string[] }} options
      */
@@ -426,8 +704,14 @@ export class DebateExecutor {
 
         const results = await Promise.all(agentIds.map(async (agentId) => {
             const adapter = this.resolveAdapter(agentId);
+            const executionPath = this.resolveExecutionPath(agentId);
             const startedAt = Date.now();
-            const { stream, done } = adapter.execute(this.session.id, this.session.snapshotPath ?? this.session.projectDir, options.prompt);
+            const { stream, done } = adapter.execute(
+                this.session.id,
+                executionPath,
+                options.prompt,
+                { timeouts: this.getPhaseTimeouts(agentId, options.phase) },
+            );
 
             for await (const event of stream) {
                 this.onEvent(event);
@@ -511,11 +795,19 @@ export class DebateExecutor {
      */
     async runRebuttal(disputed) {
         this.disputedFindings = disputed;
-        await this.runReviewPass(this.session.debateAgents ?? [], {
-            phase: 'rebuttal',
-            prompt: buildRebuttalPrompt(disputed, this.session.debateRound ?? 0),
-            disputedKeys: disputed.map((finding) => finding.dedupeKey),
-        });
+        const scope = getReviewScope(this.session);
+        const batches = splitDisputedIntoBatches(disputed, { fileReview: scope.isFileReview });
+
+        for (const [index, batch] of batches.entries()) {
+            const batchLabel = batches.length > 1
+                ? `\n\nRebuttal batch ${index + 1} of ${batches.length}.`
+                : '';
+            await this.runReviewPass(this.session.debateAgents ?? [], {
+                phase: 'rebuttal',
+                prompt: `${buildRebuttalPrompt(batch, this.session.debateRound ?? 0, this.session)}${batchLabel}`,
+                disputedKeys: batch.map((finding) => finding.dedupeKey),
+            });
+        }
     }
 
     /**
@@ -540,8 +832,9 @@ export class DebateExecutor {
         const startedAt = Date.now();
         const { stream, done } = adapter.execute(
             this.session.id,
-            this.session.snapshotPath ?? this.session.projectDir,
-            buildTieBreakPrompt(this.disputedFindings),
+            this.resolveExecutionPath(decider),
+            buildTieBreakPrompt(this.disputedFindings, this.session),
+            { timeouts: this.getPhaseTimeouts(decider, 'tie_break') },
         );
 
         for await (const event of stream) {
@@ -595,10 +888,11 @@ export class DebateExecutor {
             ? await this.runTieBreakerIfNeeded()
             : [];
         const evaluations = [...this.evaluations, ...tieBreakEvaluations];
+        const authoritativeDecider = tieBreakEvaluations.length > 0
+            ? this.session.assignments?.decider
+            : undefined;
         const logical = engine.mergeFinalFindings(this.findings, evaluations, {
-            decider: tieBreakEvaluations.length > 0 || (this.session.debateAgents ?? []).includes(this.session.assignments?.decider ?? '')
-                ? this.session.assignments?.decider
-                : undefined,
+            decider: authoritativeDecider,
         });
         const keptKeys = new Set(logical.map((finding) => finding.dedupeKey));
         const finalFindings = flattenFindings([...this.rawFindingsByAgent.values()])
@@ -618,84 +912,88 @@ export class DebateExecutor {
      * @param {{ agents: string[], maxRounds?: number, decider?: string, consensusThreshold?: number }} config
      */
     async run(config) {
-        this.initDebate(config);
-        this.transition('start');
+        try {
+            this.initDebate(config);
+            this.transition('start');
 
-        await this.runReviewPass(config.agents, {
-            phase: 'review',
-            prompt: buildInitialReviewPrompt(this.session),
-        });
-
-        this.transition('all_reviews_done');
-
-        while (!isDebateTerminal(this.session.debateState ?? 'failed')) {
-            const action = this.reducer.getNextAction({
-                debateState: this.session.debateState ?? 'failed',
-                debateRound: this.session.debateRound ?? 0,
-                agents: this.session.debateAgents ?? [],
-                findings: this.findings,
-                evaluations: this.evaluations,
-                completedReviews: this.completedReviews,
-                completedEvals: this.completedEvals,
+            await this.runReviewPass(config.agents, {
+                phase: 'review',
+                prompt: buildInitialReviewPrompt(this.session),
             });
 
-            switch (action.type) {
-                case 'START_CROSS_EVAL':
-                    this.inferEvaluations();
-                    this.transition('all_evals_done');
-                    break;
+            this.transition('all_reviews_done');
 
-                case 'CHECK_CONSENSUS': {
-                    const agreement = this.reducer.consensus.calculateAgreement(this.findings, this.evaluations);
-                    this.lastAgreement = agreement;
-                    this.disputedFindings = agreement.disputed;
-                    if (this.reducer.consensus.hasConsensus(agreement.ratio, this.session.debateRound ?? 0)) {
-                        const resolution = await this.resolveFinalFindings();
-                        this.transition('consensus_reached');
-                        return resolution;
-                    }
-                    if ((this.session.debateRound ?? 0) >= (this.session.debateMaxRounds ?? 3)) {
-                        this.transition('max_rounds');
+            while (!isDebateTerminal(this.session.debateState ?? 'failed')) {
+                const action = this.reducer.getNextAction({
+                    debateState: this.session.debateState ?? 'failed',
+                    debateRound: this.session.debateRound ?? 0,
+                    agents: this.session.debateAgents ?? [],
+                    findings: this.findings,
+                    evaluations: this.evaluations,
+                    completedReviews: this.completedReviews,
+                    completedEvals: this.completedEvals,
+                });
+
+                switch (action.type) {
+                    case 'START_CROSS_EVAL':
+                        this.inferEvaluations();
+                        this.transition('all_evals_done');
+                        break;
+
+                    case 'CHECK_CONSENSUS': {
+                        const agreement = this.reducer.consensus.calculateAgreement(this.findings, this.evaluations);
+                        this.lastAgreement = agreement;
+                        this.disputedFindings = agreement.disputed;
+                        if (this.reducer.consensus.hasConsensus(agreement.ratio, this.session.debateRound ?? 0)) {
+                            const resolution = await this.resolveFinalFindings();
+                            this.transition('consensus_reached');
+                            return resolution;
+                        }
+                        if ((this.session.debateRound ?? 0) >= (this.session.debateMaxRounds ?? 3)) {
+                            this.transition('max_rounds');
+                            break;
+                        }
+                        this.transition('no_consensus');
+                        await this.runRebuttal(agreement.disputed);
+                        this.transition('rebuttals_done');
                         break;
                     }
-                    this.transition('no_consensus');
-                    await this.runRebuttal(agreement.disputed);
-                    this.transition('rebuttals_done');
-                    break;
-                }
 
-                case 'RESOLVE': {
-                    const resolution = await this.resolveFinalFindings();
-                    if (this.session.debateState === 'tie_break') {
-                        this.transition('tie_broken');
-                    } else if (this.session.debateState === 'consensus_check') {
-                        this.transition('consensus_reached');
+                    case 'RESOLVE': {
+                        const resolution = await this.resolveFinalFindings();
+                        if (this.session.debateState === 'tie_break') {
+                            this.transition('tie_broken');
+                        } else if (this.session.debateState === 'consensus_check') {
+                            this.transition('consensus_reached');
+                        }
+                        return resolution;
                     }
-                    return resolution;
+
+                    case 'TIE_BREAK':
+                        this.transition('max_rounds');
+                        break;
+
+                    case 'START_REBUTTAL':
+                        this.transition('no_consensus');
+                        await this.runRebuttal(/** @type {FindingEntry[]} */ (action.payload.disputed ?? []));
+                        this.transition('rebuttals_done');
+                        break;
+
+                    case 'FAIL':
+                        this.transition('error');
+                        throw new Error(String(action.payload.reason ?? 'Debate failed'));
+
+                    case 'START_REVIEW':
+                        throw new Error(`Unexpected action ${action.type} in executor loop`);
+
+                    default:
+                        throw new Error(`Unhandled action ${action.type}`);
                 }
-
-                case 'TIE_BREAK':
-                    this.transition('max_rounds');
-                    break;
-
-                case 'START_REBUTTAL':
-                    this.transition('no_consensus');
-                    await this.runRebuttal(/** @type {FindingEntry[]} */ (action.payload.disputed ?? []));
-                    this.transition('rebuttals_done');
-                    break;
-
-                case 'FAIL':
-                    this.transition('error');
-                    throw new Error(String(action.payload.reason ?? 'Debate failed'));
-
-                case 'START_REVIEW':
-                    throw new Error(`Unexpected action ${action.type} in executor loop`);
-
-                default:
-                    throw new Error(`Unhandled action ${action.type}`);
             }
-        }
 
-        throw new Error(`Debate terminated unexpectedly in state "${this.session.debateState}"`);
+            throw new Error(`Debate terminated unexpectedly in state "${this.session.debateState}"`);
+        } finally {
+            this.cleanupFileScopedWorkspace();
+        }
     }
 }

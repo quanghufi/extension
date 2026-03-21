@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 import subprocess
 import tempfile
@@ -113,7 +113,7 @@ class CodexReviewBridgeTests(unittest.TestCase):
         self.assertEqual(result["review"]["status"], "has_findings")
         self.assertIn("git change discovery failed", result["review"]["summary"])
 
-    def test_get_latest_review_returns_timestamped_history_artifacts(self) -> None:
+    def test_get_latest_review_returns_latest_artifacts(self) -> None:
         artifact_dir = self.workspace / ".agent" / "handoff"
         artifact_dir.mkdir(parents=True)
 
@@ -124,74 +124,22 @@ class CodexReviewBridgeTests(unittest.TestCase):
             "fix_plan": [],
             "rerun_review": False,
         }
-        history_review = {
-            "status": "has_findings",
-            "summary": "History review",
-            "findings": [],
-            "fix_plan": [],
-            "rerun_review": True,
-        }
 
         latest_json = artifact_dir / "codex-review.latest.json"
         latest_md = artifact_dir / "codex-review.latest.md"
-        history_json = artifact_dir / "codex-review.20260309T120000Z.json"
-        history_md = artifact_dir / "codex-review.20260309T120000Z.md"
 
         latest_json.write_text(json.dumps(latest_review), encoding="utf-8")
         latest_md.write_text("# latest\n", encoding="utf-8")
-        history_json.write_text(json.dumps(history_review), encoding="utf-8")
-        history_md.write_text("# history\n", encoding="utf-8")
 
         result = self.bridge.get_latest_review(self.workspace)
 
         self.assertEqual(result["artifacts"]["latest_json"], str(latest_json))
         self.assertEqual(result["artifacts"]["latest_markdown"], str(latest_md))
-        self.assertEqual(result["artifacts"]["history_json"], str(history_json))
-        self.assertEqual(result["artifacts"]["history_markdown"], str(history_md))
 
-    def test_get_latest_review_prefers_encoded_timestamp_over_mtime(self) -> None:
-        artifact_dir = self.workspace / ".agent" / "handoff"
-        artifact_dir.mkdir(parents=True)
-
-        latest_review = {
-            "status": "has_findings",
-            "summary": "Latest review",
-            "findings": [],
-            "fix_plan": [],
-            "rerun_review": False,
-        }
-        latest_json = artifact_dir / "codex-review.latest.json"
-        latest_md = artifact_dir / "codex-review.latest.md"
-        latest_json.write_text(json.dumps(latest_review), encoding="utf-8")
-        latest_md.write_text("# latest\n", encoding="utf-8")
-
-        older_history = artifact_dir / "codex-review.20260309T120000Z.aaaa1111.json"
-        newer_history = artifact_dir / "codex-review.20260309T120001Z.bbbb2222.json"
-        older_history.write_text(json.dumps(latest_review), encoding="utf-8")
-        older_history.with_suffix(".md").write_text("# older\n", encoding="utf-8")
-        newer_history.write_text(json.dumps(latest_review), encoding="utf-8")
-        newer_history.with_suffix(".md").write_text("# newer\n", encoding="utf-8")
-
-        os.utime(older_history, (2000000000, 2000000000))
-        os.utime(newer_history, (1000000000, 1000000000))
-
-        result = self.bridge.get_latest_review(self.workspace)
-
-        self.assertEqual(result["artifacts"]["history_json"], str(newer_history))
-        self.assertEqual(result["artifacts"]["history_markdown"], str(newer_history.with_suffix(".md")))
-
-    def test_get_latest_review_does_not_create_artifact_directory_on_read(self) -> None:
-        artifact_dir = self.workspace / ".agent" / "handoff"
-
-        with self.assertRaises(FileNotFoundError):
-            self.bridge.get_latest_review(self.workspace)
-
-        self.assertFalse(artifact_dir.exists())
-
-    def test_write_artifacts_generates_unique_history_paths(self) -> None:
+    def test_write_artifacts_only_creates_latest_files(self) -> None:
         review = {
             "status": "has_findings",
-            "summary": "Unique history",
+            "summary": "Only latest",
             "findings": [],
             "fix_plan": [],
             "rerun_review": False,
@@ -200,8 +148,33 @@ class CodexReviewBridgeTests(unittest.TestCase):
         first = self.bridge.write_artifacts(self.workspace, review)
         second = self.bridge.write_artifacts(self.workspace, review)
 
-        self.assertNotEqual(first["history_json"], second["history_json"])
-        self.assertNotEqual(first["history_markdown"], second["history_markdown"])
+        # Both calls should return the same latest paths
+        self.assertEqual(first["latest_json"], second["latest_json"])
+        self.assertEqual(first["latest_markdown"], second["latest_markdown"])
+        # No history keys
+        self.assertNotIn("history_json", first)
+        self.assertNotIn("history_markdown", first)
+
+    def test_cleanup_history_files_removes_old_artifacts(self) -> None:
+        artifact_dir = self.workspace / ".agent" / "handoff"
+        artifact_dir.mkdir(parents=True)
+
+        # Create latest files (should be kept)
+        (artifact_dir / "codex-review.latest.json").write_text("{}", encoding="utf-8")
+        (artifact_dir / "codex-review.latest.md").write_text("# latest", encoding="utf-8")
+
+        # Create history files (should be deleted)
+        for i in range(5):
+            (artifact_dir / f"codex-review.20260309T12000{i}Z.json").write_text("{}", encoding="utf-8")
+            (artifact_dir / f"codex-review.20260309T12000{i}Z.md").write_text("# old", encoding="utf-8")
+
+        deleted = CodexReviewBridge.cleanup_history_files(artifact_dir)
+
+        self.assertEqual(deleted, 10)  # 5 .json + 5 .md
+        remaining = list(artifact_dir.glob("codex-review.*"))
+        self.assertEqual(len(remaining), 2)  # Only latest.json + latest.md
+        self.assertTrue((artifact_dir / "codex-review.latest.json").exists())
+        self.assertTrue((artifact_dir / "codex-review.latest.md").exists())
 
     def test_get_latest_review_cache_is_scoped_by_workspace(self) -> None:
         workspace_a = self.workspace / "proj-a"
@@ -235,34 +208,7 @@ class CodexReviewBridgeTests(unittest.TestCase):
             result_b["artifacts"]["latest_json"],
         )
 
-    def test_get_latest_review_recovers_from_corrupted_latest_json(self) -> None:
-        artifact_dir = self.workspace / ".agent" / "handoff"
-        artifact_dir.mkdir(parents=True)
 
-        latest_json = artifact_dir / "codex-review.latest.json"
-        latest_md = artifact_dir / "codex-review.latest.md"
-        history_json = artifact_dir / "codex-review.20260309T120001000000Z.aaaa1111.json"
-        history_md = artifact_dir / "codex-review.20260309T120001000000Z.aaaa1111.md"
-
-        review = {
-            "status": "has_findings",
-            "summary": "Recovered review",
-            "findings": [],
-            "fix_plan": [],
-            "rerun_review": True,
-        }
-
-        latest_json.write_text("{broken json", encoding="utf-8")
-        latest_md.write_text("# broken\n", encoding="utf-8")
-        history_json.write_text(json.dumps(review), encoding="utf-8")
-        history_md.write_text("# history\n", encoding="utf-8")
-
-        result = self.bridge.get_latest_review(self.workspace)
-        repaired_latest = json.loads(latest_json.read_text(encoding="utf-8"))
-
-        self.assertEqual(result["review"]["summary"], "Recovered review")
-        self.assertEqual(repaired_latest["summary"], "Recovered review")
-        self.assertEqual(result["artifacts"]["history_json"], str(history_json))
 
     @mock.patch("src.mcp.codex_review_mcp.subprocess.run")
     @mock.patch.object(CodexReviewBridge, "prepare_codex_home")

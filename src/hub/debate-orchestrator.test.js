@@ -1,30 +1,137 @@
 // @ts-check
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
     DebateReducer,
     DebateExecutor,
     DEBATE_AGENT_PROFILES,
+    buildInitialReviewPrompt,
+    buildRebuttalPrompt,
+    buildTieBreakPrompt,
 } from './debate-orchestrator.js';
 
 describe('debate-orchestrator', () => {
 
+    describe('prompt scoping', () => {
+        const fileScopedSession = {
+            prompt: 'Review only src/http-utils.js for hangs and UTF-8 handling.',
+            reviewOptions: {
+                review_target: 'file',
+                file_path: 'src/http-utils.js',
+            },
+        };
+
+        it('anchors the initial review prompt to the file target', () => {
+            const prompt = buildInitialReviewPrompt(fileScopedSession);
+            assert.match(prompt, /Primary review target: src\/http-utils\.js/);
+            assert.match(prompt, /Ignore any stale review outputs, handoff artifacts, debate transcripts/i);
+            assert.match(prompt, /Review the target code itself, not the debate process around it/i);
+            assert.match(prompt, /Target file content \(src\/http-utils\.js\)/i);
+        });
+
+        it('keeps rebuttal prompt anchored to the original target', () => {
+            const prompt = buildRebuttalPrompt([
+                {
+                    dedupeKey: 'dk-1',
+                    severity: 'high',
+                    title: 'Body reader can hang',
+                    agentId: 'claude-code',
+                    file: 'src/http-utils.js',
+                    line: 21,
+                    why_it_matters: 'Requests can hang forever.',
+                    fix_instructions: 'Reject on stream errors.',
+                    evidence: 'The promise only resolves on end.',
+                },
+            ], 1, fileScopedSession);
+            assert.match(prompt, /re-review the same target scope/i);
+            assert.match(prompt, /Original review prompt:/i);
+            assert.match(prompt, /src\/http-utils\.js/);
+            assert.match(prompt, /not a review of debate artifacts/i);
+            assert.match(prompt, /The disputed findings are already included below\. Do not ask for them again\./i);
+            assert.match(prompt, /Disputed findings JSON \(exact items to adjudicate\):/i);
+            assert.match(prompt, /copy the exact dedupeKey/i);
+            assert.match(prompt, /Return ONLY a JSON array/i);
+            assert.match(prompt, /"dedupeKey": "dk-1"/i);
+            assert.match(prompt, /"why_it_matters": "Requests can hang forever\."/i);
+            assert.match(prompt, /"fix_instructions": "Reject on stream errors\."/i);
+        });
+
+        it('keeps tie-break prompt anchored to the original target', () => {
+            const prompt = buildTieBreakPrompt([
+                {
+                    dedupeKey: 'dk-1',
+                    severity: 'high',
+                    title: 'Body reader can hang',
+                    agentId: 'claude-code',
+                    file: 'src/http-utils.js',
+                    line: 21,
+                    why_it_matters: 'Requests can hang forever.',
+                    fix_instructions: 'Reject on stream errors.',
+                    evidence: 'The promise only resolves on end.',
+                },
+            ], fileScopedSession);
+            assert.match(prompt, /tie-break reviewer/i);
+            assert.match(prompt, /src\/http-utils\.js/);
+            assert.match(prompt, /Do not audit debate artifacts, prompts, or repository instructions/i);
+            assert.match(prompt, /Disputed findings JSON \(exact items to adjudicate\):/i);
+            assert.match(prompt, /copy the exact dedupeKey/i);
+            assert.match(prompt, /Return ONLY a JSON array/i);
+        });
+
+        it('uses document-review wording for plan files', () => {
+            const prompt = buildInitialReviewPrompt({
+                prompt: 'Review this implementation plan for contradictions and risky guidance.',
+                reviewOptions: {
+                    review_target: 'file',
+                    file_path: 'plans/phase-04-code-annotation.md',
+                },
+            });
+
+            assert.match(prompt, /document or implementation plan/i);
+            assert.match(prompt, /Review the document itself/i);
+            assert.match(prompt, /implementation risks/i);
+        });
+
+        it('uses broad-review wording for project-wide review', () => {
+            const prompt = buildInitialReviewPrompt({
+                prompt: 'Review the current project for real bugs.',
+                reviewOptions: {
+                    review_target: 'uncommitted',
+                },
+            });
+
+            assert.match(prompt, /broad-scope review/i);
+            assert.match(prompt, /repository-wide or multi-file review/i);
+            assert.match(prompt, /prioritize fewer, stronger findings/i);
+        });
+    });
+
     // ── DEBATE_AGENT_PROFILES ────────────────────────
 
     describe('DEBATE_AGENT_PROFILES', () => {
-        it('has codex profile with longer timeouts', () => {
+        it('has codex profile with generous timeouts', () => {
             assert.ok(DEBATE_AGENT_PROFILES['codex']);
             assert.equal(DEBATE_AGENT_PROFILES['codex'].reviewTimeoutMs, 360_000);
         });
 
-        it('has claude-code profile with shorter timeouts', () => {
+        it('has claude-code profile with matching generous timeouts', () => {
             assert.ok(DEBATE_AGENT_PROFILES['claude-code']);
-            assert.equal(DEBATE_AGENT_PROFILES['claude-code'].reviewTimeoutMs, 120_000);
+            assert.equal(DEBATE_AGENT_PROFILES['claude-code'].reviewTimeoutMs, 360_000);
+            assert.equal(DEBATE_AGENT_PROFILES['claude-code'].rebuttalTimeoutMs, 360_000);
         });
 
-        it('codex review timeout > claude-code review timeout', () => {
-            assert.ok(
-                DEBATE_AGENT_PROFILES['codex'].reviewTimeoutMs >
+        it('both agents have identical review timeouts', () => {
+            assert.equal(
+                DEBATE_AGENT_PROFILES['codex'].reviewTimeoutMs,
+                DEBATE_AGENT_PROFILES['claude-code'].reviewTimeoutMs,
+            );
+        });
+
+        it('gives claude-code a rebuttal budget equal to its review budget', () => {
+            assert.equal(
+                DEBATE_AGENT_PROFILES['claude-code'].rebuttalTimeoutMs,
                 DEBATE_AGENT_PROFILES['claude-code'].reviewTimeoutMs,
             );
         });
@@ -382,6 +489,287 @@ describe('debate-orchestrator', () => {
                 executor.recordTiming('codex', 'review', Date.now(), Date.now() + 360000, true);
                 assert.equal(executor.timings[0].timedOut, true);
             });
+
+            it('passes phase timeout overrides into adapter execution', async () => {
+                const session = createMockSession();
+                session.id = 'sess-timeout-override';
+                session.projectDir = '/project';
+                session.snapshotPath = '/snapshot';
+                session.debateRound = 0;
+                session.debateAgents = ['claude-code'];
+
+                /** @type {any[]} */
+                const calls = [];
+                const executor = new DebateExecutor({
+                    session,
+                    adapterMap: {
+                        'claude-code': {
+                            execute: (...args) => {
+                                calls.push(args);
+                                return {
+                                    stream: (async function* () {})(),
+                                    done: Promise.resolve({
+                                        status: 'ok',
+                                        findings: [],
+                                        timingMs: { firstByteMs: 0, lastIdleGapMs: 0, totalMs: 0 },
+                                    }),
+                                };
+                            },
+                        },
+                    },
+                    agentProfiles: {
+                        'claude-code': {
+                            reviewTimeoutMs: 123_000,
+                            evalTimeoutMs: 45_000,
+                            rebuttalTimeoutMs: 67_000,
+                        },
+                    },
+                });
+
+                await executor.runReviewPass(['claude-code'], {
+                    phase: 'review',
+                    prompt: 'Review this snapshot',
+                });
+
+                assert.equal(calls.length, 1);
+                assert.deepEqual(calls[0][3], {
+                    timeouts: {
+                        firstByteMs: 123_000,
+                        idleMs: 123_000,
+                        hardMs: 123_000,
+                    },
+                });
+            });
+
+            it('uses a file-scoped sandbox workspace for file target reviews', async () => {
+                const session = createMockSession();
+                session.id = 'sess-file-scope';
+                session.projectDir = process.cwd();
+                session.snapshotPath = process.cwd();
+                session.prompt = 'Review only src/http-utils.js';
+                session.reviewOptions = {
+                    review_target: 'file',
+                    file_path: 'src/http-utils.js',
+                };
+                session.debateRound = 0;
+                session.debateAgents = ['claude-code'];
+
+                /** @type {any[]} */
+                const calls = [];
+                const executor = new DebateExecutor({
+                    session,
+                    adapterMap: {
+                        'claude-code': {
+                            execute: (...args) => {
+                                calls.push(args);
+                                return {
+                                    stream: (async function* () {})(),
+                                    done: Promise.resolve({
+                                        status: 'ok',
+                                        findings: [],
+                                        timingMs: { firstByteMs: 0, lastIdleGapMs: 0, totalMs: 0 },
+                                    }),
+                                };
+                            },
+                        },
+                    },
+                });
+
+                await executor.runReviewPass(['claude-code'], {
+                    phase: 'review',
+                    prompt: 'Review only src/http-utils.js',
+                });
+
+                assert.equal(calls.length, 1);
+                assert.notEqual(calls[0][1], process.cwd());
+                assert.match(calls[0][1], /extension-debate-file-/i);
+            });
+
+            it('copies only the target file into the file-scoped sandbox', async () => {
+                const session = createMockSession();
+                session.id = 'sess-file-only-copy';
+                session.projectDir = process.cwd();
+                session.snapshotPath = process.cwd();
+                session.prompt = 'Review only src/http-utils.js';
+                session.reviewOptions = {
+                    review_target: 'file',
+                    file_path: 'src/http-utils.js',
+                };
+                session.debateRound = 0;
+                session.debateAgents = ['claude-code'];
+
+                /** @type {any[]} */
+                const calls = [];
+                const executor = new DebateExecutor({
+                    session,
+                    adapterMap: {
+                        'claude-code': {
+                            execute: (...args) => {
+                                calls.push(args);
+                                return {
+                                    stream: (async function* () {})(),
+                                    done: Promise.resolve({
+                                        status: 'ok',
+                                        findings: [],
+                                        timingMs: { firstByteMs: 0, lastIdleGapMs: 0, totalMs: 0 },
+                                    }),
+                                };
+                            },
+                        },
+                    },
+                });
+
+                await executor.runReviewPass(['claude-code'], {
+                    phase: 'review',
+                    prompt: 'Review only src/http-utils.js',
+                });
+
+                const sandboxPath = String(calls[0][1]);
+                assert.equal(fs.existsSync(path.join(sandboxPath, 'src', 'http-utils.js')), true);
+                assert.equal(fs.existsSync(path.join(sandboxPath, 'src', 'api-routes.js')), false);
+                assert.equal(fs.existsSync(path.join(sandboxPath, 'src', 'collab-routes.js')), false);
+            });
+
+            it('splits file-scoped rebuttals into one finding per batch', async () => {
+                const session = createMockSession();
+                session.id = 'sess-file-per-finding';
+                session.projectDir = process.cwd();
+                session.snapshotPath = process.cwd();
+                session.prompt = 'Review only src/http-utils.js';
+                session.reviewOptions = {
+                    review_target: 'file',
+                    file_path: 'src/http-utils.js',
+                };
+                session.debateRound = 1;
+                session.debateAgents = ['claude-code'];
+
+                /** @type {any[]} */
+                const calls = [];
+                const executor = new DebateExecutor({
+                    session,
+                    adapterMap: {
+                        'claude-code': {
+                            execute: (...args) => {
+                                calls.push(args);
+                                return {
+                                    stream: (async function* () {})(),
+                                    done: Promise.resolve({
+                                        status: 'ok',
+                                        findings: [],
+                                        timingMs: { firstByteMs: 0, lastIdleGapMs: 0, totalMs: 0 },
+                                    }),
+                                };
+                            },
+                        },
+                    },
+                });
+
+                await executor.runRebuttal([
+                    { dedupeKey: 'f1', severity: 'high', title: 'A', agentId: 'codex', file: 'src/http-utils.js' },
+                    { dedupeKey: 'f2', severity: 'medium', title: 'B', agentId: 'codex', file: 'src/http-utils.js' },
+                ]);
+
+                assert.equal(calls.length, 2);
+                assert.match(String(calls[0][2]), /"dedupeKey": "f1"/i);
+                assert.doesNotMatch(String(calls[0][2]), /"dedupeKey": "f2"/i);
+                assert.match(String(calls[1][2]), /"dedupeKey": "f2"/i);
+                assert.doesNotMatch(String(calls[1][2]), /"dedupeKey": "f1"/i);
+            });
+
+            it('splits broad-scope rebuttals into multiple batches', async () => {
+                const session = createMockSession();
+                session.id = 'sess-batched-rebuttal';
+                session.projectDir = process.cwd();
+                session.snapshotPath = process.cwd();
+                session.prompt = 'Review the project for bugs';
+                session.reviewOptions = {
+                    review_target: 'uncommitted',
+                };
+                session.debateRound = 1;
+                session.debateAgents = ['claude-code'];
+
+                /** @type {any[]} */
+                const calls = [];
+                const executor = new DebateExecutor({
+                    session,
+                    adapterMap: {
+                        'claude-code': {
+                            execute: (...args) => {
+                                calls.push(args);
+                                return {
+                                    stream: (async function* () {})(),
+                                    done: Promise.resolve({
+                                        status: 'ok',
+                                        findings: [],
+                                        timingMs: { firstByteMs: 0, lastIdleGapMs: 0, totalMs: 0 },
+                                    }),
+                                };
+                            },
+                        },
+                    },
+                });
+
+                await executor.runRebuttal([
+                    { dedupeKey: 'f1', severity: 'high', title: 'A', agentId: 'codex', file: 'src/a.js' },
+                    { dedupeKey: 'f2', severity: 'high', title: 'B', agentId: 'codex', file: 'src/a.js' },
+                    { dedupeKey: 'f3', severity: 'medium', title: 'C', agentId: 'codex', file: 'src/b.js' },
+                    { dedupeKey: 'f4', severity: 'medium', title: 'D', agentId: 'codex', file: 'src/b.js' },
+                    { dedupeKey: 'f5', severity: 'low', title: 'E', agentId: 'codex', file: 'src/c.js' },
+                ]);
+
+                assert.equal(calls.length, 3);
+                assert.match(String(calls[0][2]), /Rebuttal batch 1 of 3/i);
+                assert.match(String(calls[1][2]), /Rebuttal batch 2 of 3/i);
+                assert.match(String(calls[2][2]), /Rebuttal batch 3 of 3/i);
+            });
+
+            it('chunks broad-scope rebuttals when one file has many disputed findings', async () => {
+                const session = createMockSession();
+                session.id = 'sess-batched-rebuttal-chunked';
+                session.projectDir = process.cwd();
+                session.snapshotPath = process.cwd();
+                session.prompt = 'Review the project for bugs';
+                session.reviewOptions = {
+                    review_target: 'uncommitted',
+                };
+                session.debateRound = 1;
+                session.debateAgents = ['claude-code'];
+
+                /** @type {any[]} */
+                const calls = [];
+                const executor = new DebateExecutor({
+                    session,
+                    adapterMap: {
+                        'claude-code': {
+                            execute: (...args) => {
+                                calls.push(args);
+                                return {
+                                    stream: (async function* () {})(),
+                                    done: Promise.resolve({
+                                        status: 'ok',
+                                        findings: [],
+                                        timingMs: { firstByteMs: 0, lastIdleGapMs: 0, totalMs: 0 },
+                                    }),
+                                };
+                            },
+                        },
+                    },
+                });
+
+                await executor.runRebuttal([
+                    { dedupeKey: 'f1', severity: 'high', title: 'A', agentId: 'codex', file: 'src/a.js' },
+                    { dedupeKey: 'f2', severity: 'high', title: 'B', agentId: 'codex', file: 'src/a.js' },
+                    { dedupeKey: 'f3', severity: 'medium', title: 'C', agentId: 'codex', file: 'src/a.js' },
+                    { dedupeKey: 'f4', severity: 'medium', title: 'D', agentId: 'codex', file: 'src/b.js' },
+                ]);
+
+                assert.equal(calls.length, 3);
+                assert.match(String(calls[0][2]), /"dedupeKey": "f1"/i);
+                assert.match(String(calls[0][2]), /"dedupeKey": "f2"/i);
+                assert.doesNotMatch(String(calls[0][2]), /"dedupeKey": "f3"/i);
+                assert.match(String(calls[1][2]), /"dedupeKey": "f3"/i);
+                assert.match(String(calls[2][2]), /"dedupeKey": "f4"/i);
+            });
         });
 
         describe('getDebateStatus', () => {
@@ -410,6 +798,46 @@ describe('debate-orchestrator', () => {
                 const status = executor.getDebateStatus();
                 assert.equal(status.debateState, null);
                 assert.equal(status.debateActive, false);
+            });
+        });
+
+        describe('resolveFinalFindings', () => {
+            it('does not treat a debating agent as an authoritative decider without an independent tie-break', async () => {
+                const session = createMockSession();
+                session.debateState = 'resolved';
+                session.debateAgents = ['codex', 'claude-code'];
+                session.assignments.decider = 'codex';
+
+                const executor = new DebateExecutor({ session });
+                executor.rawFindingsByAgent.set('claude-code', [
+                    {
+                        id: 'finding-1',
+                        dedupe_key: 'f1',
+                        summary: 'readBody hangs on abort',
+                        severity: 'high',
+                    },
+                ]);
+                executor.findings = [
+                    {
+                        dedupeKey: 'f1',
+                        severity: 'high',
+                        title: 'readBody hangs on abort',
+                        agentId: 'claude-code',
+                        round: 3,
+                    },
+                ];
+                executor.evaluations = [
+                    { dedupeKey: 'f1', verdict: 'rejected', agentId: 'codex', round: 3 },
+                    { dedupeKey: 'f1', verdict: 'accepted', agentId: 'claude-code', round: 3 },
+                ];
+
+                const result = await executor.resolveFinalFindings();
+
+                assert.equal(result.logicalFindings.length, 1);
+                assert.equal(result.logicalFindings[0].dedupeKey, 'f1');
+                assert.equal(result.finalFindings.length, 1);
+                assert.equal(session.allFindings.length, 1);
+                assert.equal(session.mergedFindings.length, 1);
             });
         });
 

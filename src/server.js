@@ -13,6 +13,7 @@ import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import path from 'node:path';
 import fs from 'node:fs';
+import fsPromises from 'node:fs/promises';
 import { SessionStore } from './hub/session-store.js';
 import { SnapshotManager } from './snapshot/snapshot-manager.js';
 import { apiListSessions, apiCreateSession, apiGetSession, apiDeleteSession, apiGetEvents, apiGetFindings, apiEvaluateFindings, apiRerunSession } from './api-routes.js';
@@ -25,7 +26,23 @@ import { DebateExecutor } from './hub/debate-orchestrator.js';
 // ── Constants ────────────────────────────────────────
 
 const DEFAULT_PORT = 3849;
-const UI_DIR = path.join(import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname), 'ui');
+const SERVER_DIR = import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname);
+const PROJECT_ROOT = path.resolve(SERVER_DIR, '..');
+const UI_DIR = path.join(SERVER_DIR, 'ui');
+
+/**
+ * Resolve a Hub storage path against the project root unless explicitly provided.
+ *
+ * @param {string|undefined} configuredPath
+ * @param {string} defaultRelativePath
+ * @returns {string}
+ */
+function resolveHubPath(configuredPath, defaultRelativePath) {
+    if (typeof configuredPath === 'string' && configuredPath.trim() !== '') {
+        return configuredPath;
+    }
+    return path.join(PROJECT_ROOT, defaultRelativePath);
+}
 
 // ── Server ───────────────────────────────────────────
 
@@ -41,10 +58,10 @@ export class HubServer {
         this.port = options.port ?? DEFAULT_PORT;
 
         /** @type {SessionStore} */
-        this.store = new SessionStore(options.dataDir ?? './data');
+        this.store = new SessionStore(resolveHubPath(options.dataDir, 'data'));
 
         /** @type {SnapshotManager} */
-        this.snapshots = new SnapshotManager(options.snapshotDir ?? './tmp/snapshots');
+        this.snapshots = new SnapshotManager(resolveHubPath(options.snapshotDir, path.join('tmp', 'snapshots')));
 
         /** @type {Map<string, import('./hub/session.js').Session>} */
         this.activeSessions = new Map();
@@ -160,7 +177,7 @@ export class HubServer {
             this.broadcast(sessionId, session.addEvent(startEvent));
 
             // Use MCP-backed Codex by default unless a specific adapter is requested.
-            const agentId = session.agentId ?? 'mcp-codex';
+            const agentId = session.agentId ?? 'codex';
             const adapter = getAdapter(agentId);
             session.registerAgent(agentId);
             console.error(`[Orchestrator] Executing adapter: ${agentId}`);
@@ -185,7 +202,12 @@ export class HubServer {
             const doneEvent = createEvent(sessionId, 'system', 'status', { state: finalState });
             this.broadcast(sessionId, session.addEvent(doneEvent));
             session.finalize(finalState, result.findings);
+            if (finalState === 'completed') {
+                this.syncCodexCompletionIntoCollab(session, result.findings);
+            }
             this.store.save(session);
+            // State machine cleanup: remove handoff artifacts after finalize
+            this.cleanupHandoffArtifacts(session.projectDir).catch(() => {});
 
         } catch (err) {
             console.error(`runSession error for ${sessionId}:`, err);
@@ -197,10 +219,14 @@ export class HubServer {
                 this.broadcast(sessionId, session.addEvent(failedEvent));
                 session.finalize('failed');
                 this.store.save(session);
+                this.cleanupHandoffArtifacts(session.projectDir).catch(() => {});
             }
         } finally {
-            // Fix #4: Always remove from activeSessions to prevent memory leak
-            this.activeSessions.delete(sessionId);
+            // Let a background debate keep ownership of the active session slot.
+            const active = this.activeSessions.get(sessionId);
+            if (active === session && !session.debateActive) {
+                this.activeSessions.delete(sessionId);
+            }
         }
     }
 
@@ -228,6 +254,9 @@ export class HubServer {
                 session.addEvent(event, { force: true });
                 this.broadcast(sessionId, event);
             },
+            onCheckpoint: () => {
+                this.store.save(session);
+            },
         });
 
         try {
@@ -239,6 +268,7 @@ export class HubServer {
             });
             session.addEvent(startedEvent, { force: true });
             this.broadcast(sessionId, startedEvent);
+            this.store.save(session);
 
             const result = await executor.run(config);
 
@@ -251,6 +281,8 @@ export class HubServer {
             this.broadcast(sessionId, resolvedEvent);
 
             this.store.save(session);
+            // State machine cleanup: remove handoff artifacts after debate
+            this.cleanupHandoffArtifacts(session.projectDir).catch(() => {});
             return result;
         } catch (err) {
             console.error(`[Debate] runDebate error for ${sessionId}:`, err);
@@ -259,8 +291,82 @@ export class HubServer {
             this.store.save(session);
             throw err;
         } finally {
-            // Always cleanup activeSessions to prevent memory leak
-            this.activeSessions.delete(sessionId);
+            // Only delete if this debate run still owns the active session slot.
+            const active = this.activeSessions.get(sessionId);
+            if (active === session) {
+                this.activeSessions.delete(sessionId);
+            }
+        }
+    }
+
+    // ── Handoff Artifact Cleanup ──────────────────────
+
+    /**
+     * Auto-advance rerun sessions through the reviewer step after Codex finishes.
+     * Keeps collaboration state aligned with the latest review output.
+     *
+     * @param {import('./hub/session.js').Session} session
+     * @param {import('./schema/events.js').Finding[]} findings
+     */
+    syncCodexCompletionIntoCollab(session, findings) {
+        const reviewerId = session.assignments?.reviewer;
+        if (!session.parentSessionId || !reviewerId) {
+            return;
+        }
+        if (session.collabState !== 'awaiting_codex_turn') {
+            return;
+        }
+
+        try {
+            const { token } = session.claimTurn(reviewerId);
+            const findingLabel = findings.length === 1 ? 'finding' : 'findings';
+            session.addMessage({
+                agentId: reviewerId,
+                role: 'reviewer',
+                type: 'review_summary',
+                content: `Codex rerun completed with ${findings.length} ${findingLabel}.`,
+                turnToken: token,
+            });
+            session.advanceCollabState('review_complete', reviewerId, {
+                turnToken: token,
+                payload: { skipResponse: findings.length === 0 },
+            });
+        } catch (err) {
+            console.error(`[Server] Failed to sync Codex completion into collab state for session ${session.id}:`, err);
+        }
+    }
+
+    /**
+     * Clean up timestamped history files from .agent/handoff/,
+     * keeping only codex-review.latest.* files.
+     * Called by state machine on session finalize (completed/failed).
+     * @param {string} projectDir
+     */
+    async cleanupHandoffArtifacts(projectDir) {
+        const handoffDir = path.join(projectDir, '.agent', 'handoff');
+        /** @type {import('node:fs').Dirent[]} */
+        let entries;
+        try {
+            entries = await fsPromises.readdir(handoffDir, { withFileTypes: true });
+        } catch {
+            return; // Directory doesn't exist — nothing to clean
+        }
+
+        let deleted = 0;
+        for (const entry of entries) {
+            if (!entry.isFile()) continue;
+            // Keep latest.* files, delete all timestamped history files
+            if (entry.name.startsWith('codex-review.latest.')) continue;
+            if (!entry.name.startsWith('codex-review.')) continue;
+            try {
+                await fsPromises.unlink(path.join(handoffDir, entry.name));
+                deleted++;
+            } catch {
+                // Ignore: file may have been removed already
+            }
+        }
+        if (deleted > 0) {
+            console.error(`[Cleanup] Removed ${deleted} handoff history file(s) from ${handoffDir}`);
         }
     }
 

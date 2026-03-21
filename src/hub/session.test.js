@@ -85,6 +85,21 @@ describe('Session.addEvent', () => {
         assert.equal(agent?.status, 'ok');
         assert.equal(agent?.findingCount, 5);
     });
+
+    it('resets agent completion metadata when a new pass starts', () => {
+        const s = new Session({ projectDir: '/p', prompt: 'test' });
+        s.start();
+
+        s.addEvent(createEvent(s.id, 'codex', 'status', { state: 'started' }));
+        s.addEvent(createEvent(s.id, 'codex', 'status', { state: 'done', status: 'ok', findingCount: 5 }));
+        s.addEvent(createEvent(s.id, 'codex', 'status', { state: 'started' }));
+
+        const agent = s.agents.get('codex');
+        assert.equal(agent?.state, 'running');
+        assert.equal(agent?.completedAt, null);
+        assert.equal(agent?.status, null);
+        assert.equal(agent?.findingCount, 0);
+    });
 });
 
 describe('Session state management', () => {

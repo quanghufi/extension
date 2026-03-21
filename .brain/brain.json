@@ -1,24 +1,30 @@
 {
   "meta": {
     "schema_version": "1.1.0",
-    "awf_version": "4.0.2"
+    "awf_version": "4.0.2",
+    "last_saved": "2026-03-21T13:48:00+07:00"
   },
   "project": {
     "name": "extension-hub",
     "description": "Multi-agent communication hub — AI agents (Antigravity, Codex via MCP) collaborate on code review via event-driven architecture",
     "type": "developer-tool",
-    "status": "v1.0.0 Released — Global npm package, pushed to GitHub",
-    "created_at": "2026-03-08T11:27:26+07:00"
+    "status": "v1.0.0 Released — Active development (debate, handoff, multi-agent review)",
+    "created_at": "2026-03-08T11:27:26+07:00",
+    "repo": "github.com/quanghufi/extension",
+    "install": "npm install -g github:quanghufi/extension"
   },
   "tech_stack": {
     "runtime": "Node.js 20+ ESM",
     "language": "JavaScript (JSDoc types, no build step)",
-    "testing": "node:test (built-in) — 30 session + 13 server + 5 rebuttal tests passing",
+    "testing": "node:test (built-in) — 172+ tests passing",
     "websocket": "ws library",
     "process": "cross-spawn (shell:false)",
     "encoding": "UTF-8 enforced end-to-end",
     "ui": "Vanilla JS single-file dashboard",
-    "snapshot": "git worktree + attrib/icacls"
+    "snapshot": "git worktree + attrib/icacls",
+    "mcp_sdk": "@modelcontextprotocol/sdk ^1.27.1",
+    "validation": "zod ^4.3.6",
+    "source_files_count": 61
   },
   "features": [
     {
@@ -42,16 +48,6 @@
       "description": "GenericAdapter (config-driven) + AdapterRegistry (central factory)"
     },
     {
-      "name": "Live Debug Demo",
-      "status": "working",
-      "description": "live-debug-demo.js — spawns both CLIs, streams to dashboard, writes .feedback inbox"
-    },
-    {
-      "name": "Plan Consultation",
-      "status": "working",
-      "description": "consult-plan.js — asks both CLIs for plan opinions via Hub server"
-    },
-    {
       "name": "Phase 2.03: MCP Adapter + Codex Review",
       "status": "complete",
       "description": "MCP bridge adapter for Codex CLI, session-scoped review via Hub server API"
@@ -62,14 +58,9 @@
       "description": "Human-readable session labels, evaluate→rerun feedback chain, auto-label on retry, createRetry forwards all config"
     },
     {
-      "name": "Code Annotation Viewer (Phase 04 Plan)",
-      "status": "planned",
-      "description": "phase-04-code-annotation.md — file viewer with syntax highlighting, IDE links, XSS safety. Reviewed through Codex rounds."
-    },
-    {
-      "name": "Phase 4+5 Codex Review Loop",
+      "name": "Phase 2A: Agent-to-Agent Collaboration",
       "status": "complete",
-      "description": "5-round Codex review of server.js: 8 bugs fixed (session save, start() reject, path traversal, bind 127.0.0.1, isFile check, removeListener). 8/8 rebuttals won."
+      "description": "Collaboration state machine, debate orchestration, consensus engine. Committed: feat(collab): Add Phase 2A agent-to-agent collaboration layer"
     },
     {
       "name": "Multi-Agent Debate Review",
@@ -83,10 +74,50 @@
     {
       "name": "Claude Code Adapter",
       "status": "verified",
-      "description": "ClaudeCodeAdapter + parsing module. 24 tests pass. Registered in adapter-registry. Live review verified: 12 findings from base-adapter.js review (session b6316361)."
+      "description": "ClaudeCodeAdapter + parsing module. 24 tests pass. Registered in adapter-registry. Live review verified."
+    },
+    {
+      "name": "Phase 3: MCP Server",
+      "status": "complete",
+      "description": "Hub exposes itself as MCP tools via stdio transport. Tools: hub_create_review, hub_get_status, hub_get_findings, hub_evaluate_findings, hub_rerun_review, hub_list_sessions, plus 5 collab tools + debate tools."
+    },
+    {
+      "name": "Debate Timeout Tuning",
+      "status": "complete",
+      "description": "Increased Claude Code agent timeout to match review needs (reviews take 2-5 min). Prevents premature timeout during debates."
+    },
+    {
+      "name": "Handoff Artifact Cleanup",
+      "status": "complete",
+      "description": "Only latest.* files retained in handoff artifacts. Past history auto-cleaned during session finalization."
+    },
+    {
+      "name": "Live Debate Runs",
+      "status": "verified",
+      "description": "Ran live debates with Codex + Claude Code agents on extension-hub.js. Cross-evaluation working. Sessions stored in tmp/live-debate-data-*/sessions/*.json"
+    },
+    {
+      "name": "Live Debug Demo",
+      "status": "working",
+      "description": "live-debug-demo.js — spawns both CLIs, streams to dashboard, writes .feedback inbox"
+    },
+    {
+      "name": "Plan Consultation",
+      "status": "working",
+      "description": "consult-plan.js — asks both CLIs for plan opinions via Hub server"
+    },
+    {
+      "name": "Code Annotation Viewer (Phase 04)",
+      "status": "planned",
+      "description": "phase-04-code-annotation.md — file viewer with syntax highlighting, IDE links, XSS safety. Reviewed through Codex rounds."
     }
   ],
   "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test src/**/*.test.js",
+    "e2e": "node scripts/e2e-test.js",
+    "e2e:dry": "node scripts/e2e-test.js --dry-run",
+    "mcp:hub": "node src/mcp-server.js",
     "demo:live-debug": "node scripts/live-debug-demo.js [--port N]",
     "demo:both-agents": "node scripts/demo-both-agents.js",
     "consult:plan": "node scripts/consult-plan.js [--port N]"
@@ -151,6 +182,14 @@
     {
       "decision": "expireTurnIfNeeded → waitingStateForAgent()",
       "reason": "Dead-end: expired turns always went to awaiting_assignment. Now recovers to correct waiting state for the role."
+    },
+    {
+      "decision": "Only keep latest.* in handoff artifacts",
+      "reason": "Past handoff history is noise — only latest matters for next session. Cleanup integrated into session finalization."
+    },
+    {
+      "decision": "Claude Code timeout increased for debates",
+      "reason": "Default timeout too short — debates involve deep analysis that takes 2-5 minutes. Increased to prevent false failures."
     }
   ],
   "knowledge_items": {
@@ -162,34 +201,27 @@
       "Claude Code -p mode with --output-format json returns structured_output field, not result text",
       "Claude Code exit code null is normal — check is_error:false instead",
       "raw_output broadcast should NOT truncate (was 1200 char limit, caused data loss)",
-      "Duplicate method definitions in JS class: later definition silently overrides earlier one at runtime. TS lint shows 'Duplicate function implementation' but easy to miss.",
-      "Rerun with rebuttals context can cause Codex to return 0 findings (too aggressive context). Fresh run on same file produces 7-8 findings. Rerun prompt needs tuning.",
+      "Duplicate method definitions in JS class: later definition silently overrides earlier one at runtime",
+      "Rerun with rebuttals context can cause Codex to return 0 findings (too aggressive context)",
       "PowerShell ConvertTo-Json truncates nested objects. Use -Depth 3+ for complex request bodies.",
       "Claude Code CLI re-added as ClaudeCodeAdapter for multi-agent review",
-      "path.join + startsWith can be tricked by sibling dirs sharing prefix (ui vs ui-secret). Fix: startsWith(dir + path.sep)",
-      "http.Server.listen(port) without host binds to 0.0.0.0 not 127.0.0.1. Always specify '127.0.0.1' for localhost-only.",
-      "removeAllListeners('error') removes ALL error handlers, not just yours. Use named function + removeListener(fn).",
+      "path.join + startsWith can be tricked by sibling dirs sharing prefix. Fix: startsWith(dir + path.sep)",
+      "http.Server.listen(port) without host binds to 0.0.0.0. Always specify '127.0.0.1'.",
+      "removeAllListeners('error') removes ALL error handlers. Use named function + removeListener(fn).",
       "existsSync returns true for directories. Always check statSync().isFile() before createReadStream.",
       "Codex MCP adapter can stall — Hub watchdog detects via idleMs > 45s. Fix: restart Hub server.",
-      "Codex keeps re-raising the same finding with different framing after withdrawal. Stream error raised 3x, withdrawn 3x.",
-      "PowerShell `exit` in inline code (run_command) kills entire shell process. Use `break` + `$result` variable instead. Only use `exit` in .ps1 script files.",
+      "PowerShell `exit` in inline code kills entire shell. Use `break` + `$result` variable instead.",
       {
         "issue": "createEvent takes 4 positional args (sessionId, agentId, eventType, payload) NOT options object",
-        "files": [
-          "src/schema/events.js"
-        ]
+        "files": ["src/schema/events.js"]
       },
       {
         "issue": "createFinding requires summary/evidence/file (NOT title/description/category). Auto-generates id and dedupe_key.",
-        "files": [
-          "src/schema/events.js"
-        ]
+        "files": ["src/schema/events.js"]
       },
       {
         "issue": "listAdapters() returns string[] of agent IDs, not adapter objects",
-        "files": [
-          "src/adapters/adapter-registry.js"
-        ]
+        "files": ["src/adapters/adapter-registry.js"]
       },
       {
         "issue": "e2e-test.js imported 'ClaudeAdapter' from 'claude-adapter.js' — file renamed to 'claude-code-adapter.js' with class 'ClaudeCodeAdapter'",
@@ -202,6 +234,10 @@
       {
         "issue": "REST apiAdvanceSession didn't pass turnToken to advanceCollabState — turn-sensitive actions silently failed",
         "files": ["src/collab-routes.js"]
+      },
+      {
+        "issue": "Live debates may timeout if Claude Code agent takes too long — increased timeout to 600s hard limit",
+        "files": ["src/adapters/claude-code-adapter.js"]
       }
     ],
     "conventions": [
@@ -209,23 +245,29 @@
       "Agent feedback in .feedback/, run logs in .agents/runs/",
       "File splitting: warn >200 LOC, must split >300 LOC",
       "Session data in tmp/<script>-data/sessions/*.json",
-      "Full combined output saved to tmp/consult-*-combined.txt"
+      "Full combined output saved to tmp/consult-*-combined.txt",
+      "Handoff artifacts: only latest.* retained, history auto-cleaned"
     ],
     "patterns": [
       {
         "name": "Claude Code CLI Adapter Pattern",
-        "description": "ClaudeCodeAdapter extends BaseAdapter for Claude Code CLI. Uses -p --output-format stream-json --verbose. CRITICAL: Claude sends plain text to stdout (NOT NDJSON), so allOutput is raw text with embedded JSON. 5-strategy finding extraction: (1) NDJSON result line, (2) NDJSON result text JSON, (3) assistant messages JSON, (4) raw allOutput text JSON, (5) text fallback. Field mapping: issue/detail/recommendation → summary/evidence.",
-        "files": [
-          "src/adapters/claude-code-adapter.js",
-          "src/adapters/claude-code-parsing.js"
-        ]
+        "description": "ClaudeCodeAdapter extends BaseAdapter for Claude Code CLI. Uses -p --output-format stream-json --verbose. 5-strategy finding extraction.",
+        "files": ["src/adapters/claude-code-adapter.js", "src/adapters/claude-code-parsing.js"]
       },
       {
         "name": "Claude Code stdout is plain text, not NDJSON",
-        "description": "Despite using --output-format stream-json, Claude Code CLI sends result text directly to stdout — NOT wrapped in NDJSON {type:result,result:...} format. The parseClaudeResult MUST NOT early-return when extractResultText() returns null. Strategy 4 (parse allOutput directly) is the one that works in practice.",
-        "files": [
-          "src/adapters/claude-code-parsing.js"
-        ]
+        "description": "Despite using --output-format stream-json, Claude Code CLI sends result text directly to stdout — NOT wrapped in NDJSON. Strategy 4 (parse allOutput directly) is the one that works in practice.",
+        "files": ["src/adapters/claude-code-parsing.js"]
+      },
+      {
+        "name": "Debate Orchestration Flow",
+        "description": "hub_start_debate → validate adapters → runDebate(sessionId, agents[]) → cross-evaluate → consensus check → final report. States: idle→reviewing→evaluating→debating→done/failed.",
+        "files": ["src/hub/debate-orchestrator.js", "src/hub/debate-state.js", "src/hub/consensus-engine.js"]
+      },
+      {
+        "name": "Collaboration State Machine",
+        "description": "Session collab: reviewer→responder→decider roles. Turn-based claiming with TTL. advance actions: review_complete, request_response, request_rerun, resolve, close, release_turn.",
+        "files": ["src/hub/session-collab.js", "src/mcp-collab-tools.js", "src/collab-routes.js"]
       }
     ]
   }
