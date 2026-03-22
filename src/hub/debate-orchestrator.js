@@ -863,9 +863,34 @@ export class DebateExecutor {
 
         for (const { agentId, findings } of succeeded) {
             if (options.phase === 'rebuttal' && options.disputedKeys) {
-                const retained = (this.rawFindingsByAgent.get(agentId) ?? [])
+                const previous = this.rawFindingsByAgent.get(agentId) ?? [];
+                const retained = previous
                     .filter((finding) => !options.disputedKeys.includes(finding.dedupe_key));
-                const updated = findings.filter((finding) => options.disputedKeys.includes(finding.dedupe_key));
+
+                // Build a lookup of original findings by dedupe_key so we can
+                // backfill fields the agent may have omitted in the rebuttal.
+                /** @type {Map<string, import('../schema/events.js').Finding>} */
+                const originalByKey = new Map();
+                for (const f of previous) {
+                    if (options.disputedKeys.includes(f.dedupe_key)) {
+                        originalByKey.set(f.dedupe_key, f);
+                    }
+                }
+
+                const updated = findings
+                    .filter((finding) => options.disputedKeys.includes(finding.dedupe_key))
+                    .map((finding) => {
+                        const original = originalByKey.get(finding.dedupe_key);
+                        if (!original) return finding;
+                        // Merge: rebuttal values win, original fills gaps.
+                        return {
+                            ...original,
+                            ...Object.fromEntries(
+                                Object.entries(finding).filter(([, v]) => v != null && v !== ''),
+                            ),
+                        };
+                    });
+
                 this.rawFindingsByAgent.set(agentId, [...retained, ...updated]);
             } else {
                 this.rawFindingsByAgent.set(agentId, findings);

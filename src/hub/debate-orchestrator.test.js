@@ -910,6 +910,85 @@ describe('debate-orchestrator', () => {
             });
         });
 
+        describe('rebuttal field preservation', () => {
+            it('backfills missing fields from original finding when rebuttal returns sparse data', async () => {
+                const session = createMockSession();
+                session.id = 'sess-backfill';
+                session.projectDir = '/project';
+                session.snapshotPath = '/snapshot';
+                session.debateRound = 1;
+                session.debateAgents = ['codex'];
+
+                const executor = new DebateExecutor({
+                    session,
+                    adapterMap: {
+                        codex: {
+                            execute: () => ({
+                                stream: (async function* () {})(),
+                                done: Promise.resolve({
+                                    status: 'ok',
+                                    // Rebuttal returns sparse finding: only dedupeKey + rationale
+                                    findings: [{
+                                        id: 'f1-rebuttal',
+                                        dedupe_key: 'dk1',
+                                        summary: 'Body reader can hang',
+                                        severity: 'high',
+                                        file: 'src/http-utils.js',
+                                        line: null,
+                                        confidence: 0.5,
+                                        evidence: '',       // empty — agent omitted
+                                        why_it_matters: '', // empty — agent omitted
+                                        fix_instructions: null,
+                                    }],
+                                    timingMs: { firstByteMs: 0, lastIdleGapMs: 0, totalMs: 0 },
+                                }),
+                            }),
+                        },
+                    },
+                });
+
+                // Seed rawFindingsByAgent with original rich finding
+                executor.rawFindingsByAgent.set('codex', [{
+                    id: 'f1-original',
+                    dedupe_key: 'dk1',
+                    summary: 'Body reader can hang',
+                    severity: 'high',
+                    file: 'src/http-utils.js',
+                    line: 21,
+                    confidence: 0.9,
+                    evidence: 'The promise only resolves on end, never rejects on stream error.',
+                    why_it_matters: 'Requests can hang forever if stream errors are not handled.',
+                    fix_instructions: 'Add reject handler on stream error event.',
+                }]);
+
+                await executor.runReviewPass(['codex'], {
+                    phase: 'rebuttal',
+                    prompt: 'Reconsider...',
+                    disputedKeys: ['dk1'],
+                });
+
+                const result = executor.rawFindingsByAgent.get('codex');
+                assert.equal(result.length, 1);
+                const finding = result[0];
+
+                // Rebuttal values should win where provided
+                assert.equal(finding.dedupe_key, 'dk1');
+                assert.equal(finding.summary, 'Body reader can hang');
+                assert.equal(finding.severity, 'high');
+                assert.equal(finding.file, 'src/http-utils.js');
+
+                // Original values should backfill where rebuttal was empty/null
+                assert.equal(finding.line, 21, 'line should be backfilled from original (rebuttal had null)');
+                assert.equal(finding.confidence, 0.5, 'confidence keeps rebuttal value (0.5 is valid, not empty)');
+                assert.equal(finding.evidence, 'The promise only resolves on end, never rejects on stream error.',
+                    'evidence should be backfilled from original (rebuttal had empty string)');
+                assert.equal(finding.why_it_matters, 'Requests can hang forever if stream errors are not handled.',
+                    'why_it_matters should be backfilled from original (rebuttal had empty string)');
+                assert.equal(finding.fix_instructions, 'Add reject handler on stream error event.',
+                    'fix_instructions should be backfilled from original (rebuttal had null)');
+            });
+        });
+
         describe('retry and fallback', () => {
             it('retries a failed agent up to 3 times before giving up', async () => {
                 const session = createMockSession();
