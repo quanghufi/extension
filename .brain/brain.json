@@ -2,7 +2,7 @@
   "meta": {
     "schema_version": "1.1.0",
     "awf_version": "4.0.2",
-    "last_saved": "2026-03-21T13:48:00+07:00"
+    "last_saved": "2026-03-22T00:32:00+07:00"
   },
   "project": {
     "name": "extension-hub",
@@ -16,7 +16,7 @@
   "tech_stack": {
     "runtime": "Node.js 20+ ESM",
     "language": "JavaScript (JSDoc types, no build step)",
-    "testing": "node:test (built-in) — 172+ tests passing",
+    "testing": "node:test (built-in) — 172+ tests passing (Phase 2A complete)",
     "websocket": "ws library",
     "process": "cross-spawn (shell:false)",
     "encoding": "UTF-8 enforced end-to-end",
@@ -79,7 +79,7 @@
     {
       "name": "Phase 3: MCP Server",
       "status": "complete",
-      "description": "Hub exposes itself as MCP tools via stdio transport. Tools: hub_create_review, hub_get_status, hub_get_findings, hub_evaluate_findings, hub_rerun_review, hub_list_sessions, plus 5 collab tools + debate tools."
+      "description": "Hub exposes itself as MCP tools via stdio transport. Tools: hub_create_review, hub_get_status, hub_get_findings, hub_evaluate_findings, hub_rerun_review, hub_list_sessions, hub_create_review_and_start_dual_debate, plus 5 collab tools + debate tools."
     },
     {
       "name": "Debate Timeout Tuning",
@@ -110,6 +110,11 @@
       "name": "Code Annotation Viewer (Phase 04)",
       "status": "planned",
       "description": "phase-04-code-annotation.md — file viewer with syntax highlighting, IDE links, XSS safety. Reviewed through Codex rounds."
+    },
+    {
+      "name": "http-utils.js Security Review",
+      "status": "reviewed",
+      "description": "Dual-agent debate (Codex + Claude Code) found 6 findings: readBody unbounded memory (HIGH), readBody no error/abort handler (HIGH), jsonResponse unhandled stringify (HIGH), readBody no timeout/Slowloris (MEDIUM), readBody UTF-8 corruption (MEDIUM), jsonResponse writableEnded check (MEDIUM). 4/6 consensus 100%."
     }
   ],
   "scripts": {
@@ -238,6 +243,10 @@
       {
         "issue": "Live debates may timeout if Claude Code agent takes too long — increased timeout to 600s hard limit",
         "files": ["src/adapters/claude-code-adapter.js"]
+      },
+      {
+        "issue": "readBody in http-utils.js has no size limit, no error/abort handler, no timeout, and unsafe UTF-8 chunk decoding — all confirmed by dual-agent debate",
+        "files": ["src/http-utils.js"]
       }
     ],
     "conventions": [

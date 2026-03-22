@@ -9,6 +9,9 @@
 
 import { createEvent, createFinding } from '../schema/events.js';
 
+/** Marker that signals a prompt already contains debate instructions — adapters skip wrapping. */
+export const DEBATE_PROMPT_MARKER = '__DEBATE_PROMPT__';
+
 /** @type {RegExp} Progress bar characters (block elements U+2580–U+259F) */
 const PROGRESS_BAR_RE = /^[\u2580-\u259F\s.#=\-|/\\>]+$/;
 
@@ -23,6 +26,11 @@ const MIN_PROGRESS_LENGTH = 5;
  * @returns {string}
  */
 export function formatReviewPrompt(prompt) {
+    // Debate prompts already contain output instructions — pass through verbatim.
+    if (prompt.includes(/** @type {string} */ ('__DEBATE_PROMPT__'))) {
+        return prompt;
+    }
+
     return [
         prompt.trim(),
         '',
@@ -198,11 +206,18 @@ function parseFindingsFromAgentMessage(text) {
         return [];
     }
 
-    const items = Array.isArray(parsed)
+    let items = Array.isArray(parsed)
         ? parsed
         : Array.isArray(parsed?.findings)
             ? parsed.findings
             : null;
+
+    if (Array.isArray(items) && items.length === 0 && typeof parsed?.summary === 'string') {
+        const fallbackItems = tryParseEmbeddedItems(parsed.summary);
+        if (fallbackItems) {
+            items = fallbackItems;
+        }
+    }
 
     if (!items) {
         return [];
@@ -219,23 +234,48 @@ function normalizeFinding(item) {
         return null;
     }
 
-    const summary = item.summary ?? item.title ?? item.message ?? item.description ?? null;
+    const explicitDedupeKey = typeof item.dedupeKey === 'string'
+        ? item.dedupeKey.trim()
+        : typeof item.dedupe_key === 'string'
+            ? item.dedupe_key.trim()
+            : '';
+    const rationale = typeof item.rationale === 'string' ? item.rationale.trim() : '';
+    const summary = item.summary ?? item.title ?? item.message ?? item.description ?? explicitDedupeKey ?? null;
     if (!summary) {
         return null;
     }
 
     const confidence = normalizeConfidence(item.confidence);
-
-    return createFinding({
+    const finding = createFinding({
         severity: mapSeverity(item.severity ?? 'medium'),
         summary,
-        evidence: item.evidence ?? item.body ?? item.why_it_matters ?? item.fix_instructions ?? '',
+        evidence: item.evidence ?? item.body ?? rationale ?? item.why_it_matters ?? item.fix_instructions ?? '',
         file: item.file ?? 'unknown',
         line: typeof item.line === 'number' ? item.line : null,
         confidence,
         fix_instructions: item.fix_instructions ?? null,
-        why_it_matters: item.why_it_matters ?? null,
+        why_it_matters: item.why_it_matters ?? rationale ?? null,
     });
+
+    if (explicitDedupeKey) {
+        finding.dedupe_key = explicitDedupeKey;
+    }
+
+    return finding;
+}
+
+/**
+ * @param {string} text
+ * @returns {any[]|null}
+ */
+function tryParseEmbeddedItems(text) {
+    const trimmed = text.trim();
+    try {
+        const parsed = JSON.parse(trimmed);
+        return Array.isArray(parsed) ? parsed : null;
+    } catch {
+        return null;
+    }
 }
 
 /**

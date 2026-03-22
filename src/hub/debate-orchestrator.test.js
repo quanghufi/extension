@@ -11,6 +11,7 @@ import {
     buildRebuttalPrompt,
     buildTieBreakPrompt,
 } from './debate-orchestrator.js';
+import { DEBATE_PROMPT_MARKER } from '../adapters/claude-code-parsing.js';
 
 describe('debate-orchestrator', () => {
 
@@ -29,6 +30,9 @@ describe('debate-orchestrator', () => {
             assert.match(prompt, /Ignore any stale review outputs, handoff artifacts, debate transcripts/i);
             assert.match(prompt, /Review the target code itself, not the debate process around it/i);
             assert.match(prompt, /Target file content \(src\/http-utils\.js\)/i);
+            // New: output format and marker
+            assert.match(prompt, /Return your answer as a raw JSON array\. Do not wrap it in markdown fences/i);
+            assert.match(prompt, /__DEBATE_PROMPT__/);
         });
 
         it('keeps rebuttal prompt anchored to the original target', () => {
@@ -52,7 +56,9 @@ describe('debate-orchestrator', () => {
             assert.match(prompt, /The disputed findings are already included below\. Do not ask for them again\./i);
             assert.match(prompt, /Disputed findings JSON \(exact items to adjudicate\):/i);
             assert.match(prompt, /copy the exact dedupeKey/i);
-            assert.match(prompt, /Return ONLY a JSON array/i);
+            assert.match(prompt, /Return ONLY a raw JSON array/i);
+            assert.match(prompt, /Do not wrap in markdown fences/i);
+            assert.match(prompt, /rationale.*why you still believe/i);
             assert.match(prompt, /"dedupeKey": "dk-1"/i);
             assert.match(prompt, /"why_it_matters": "Requests can hang forever\."/i);
             assert.match(prompt, /"fix_instructions": "Reject on stream errors\."/i);
@@ -71,13 +77,21 @@ describe('debate-orchestrator', () => {
                     fix_instructions: 'Reject on stream errors.',
                     evidence: 'The promise only resolves on end.',
                 },
-            ], fileScopedSession);
+            ], fileScopedSession, [
+                { dedupeKey: 'dk-1', verdict: 'accepted', agentId: 'codex' },
+                { dedupeKey: 'dk-1', verdict: 'rejected', agentId: 'claude-code' },
+            ]);
             assert.match(prompt, /tie-break reviewer/i);
             assert.match(prompt, /src\/http-utils\.js/);
             assert.match(prompt, /Do not audit debate artifacts, prompts, or repository instructions/i);
             assert.match(prompt, /Disputed findings JSON \(exact items to adjudicate\):/i);
             assert.match(prompt, /copy the exact dedupeKey/i);
-            assert.match(prompt, /Return ONLY a JSON array/i);
+            assert.match(prompt, /Return ONLY a raw JSON array/i);
+            assert.match(prompt, /Do not wrap in markdown fences/i);
+            assert.match(prompt, /rationale.*independent assessment/i);
+            // Evaluations context
+            assert.match(prompt, /accepted by \[codex\]/i);
+            assert.match(prompt, /rejected by \[claude-code\]/i);
         });
 
         it('uses document-review wording for plan files', () => {
@@ -105,6 +119,32 @@ describe('debate-orchestrator', () => {
             assert.match(prompt, /broad-scope review/i);
             assert.match(prompt, /repository-wide or multi-file review/i);
             assert.match(prompt, /prioritize fewer, stronger findings/i);
+        });
+
+        it('initial review prompt includes output format instructions', () => {
+            const prompt = buildInitialReviewPrompt({
+                prompt: 'Review the codebase.',
+                reviewOptions: { review_target: 'uncommitted' },
+            });
+            assert.match(prompt, /Return your answer as a raw JSON array\. Do not wrap it in markdown fences/i);
+            assert.match(prompt, /severity.*critical\|high\|medium\|low/i);
+            assert.match(prompt, /confidence.*0\.0.*1\.0/i);
+            assert.match(prompt, /__DEBATE_PROMPT__/);
+        });
+
+        it('DEBATE_PROMPT_MARKER is exported and non-empty', () => {
+            assert.equal(typeof DEBATE_PROMPT_MARKER, 'string');
+            assert.ok(DEBATE_PROMPT_MARKER.length > 0);
+        });
+
+        it('tie-break works without evaluations (no crash)', () => {
+            const prompt = buildTieBreakPrompt([
+                { dedupeKey: 'dk-1', severity: 'high', title: 'Bug', agentId: 'codex' },
+            ]);
+            assert.match(prompt, /tie-break reviewer/i);
+            assert.match(prompt, /Return ONLY a raw JSON array/i);
+            // No "Agent disagreements" section when no evaluations
+            assert.doesNotMatch(prompt, /Agent disagreements/);
         });
     });
 

@@ -20,6 +20,7 @@ import {
     deriveNextDebateState,
 } from './debate-state.js';
 import { ConsensusEngine } from './consensus-engine.js';
+import { DEBATE_PROMPT_MARKER } from '../adapters/claude-code-parsing.js';
 
 // ── Per-Agent Timeout Profiles ───────────────────────
 
@@ -186,6 +187,20 @@ function formatDisputedFindingsJson(disputed) {
 }
 
 const FILE_REVIEW_REBUTTAL_BATCH_SIZE = 1;
+
+/**
+ * Unified output-format instructions for debate prompts.
+ * Placed once in the debate prompt itself, not duplicated by adapters.
+ * @returns {string[]}
+ */
+function debateOutputInstructions() {
+    return [
+        'Return your answer as a raw JSON array. Do not wrap it in markdown fences or any other text.',
+        'Each finding must have: summary, evidence, why_it_matters, fix_instructions, severity (critical|high|medium|low), file, line (null if unknown), confidence (0.0-1.0).',
+        'When adjudicating disputed findings that include a "dedupeKey", copy that exact "dedupeKey" into each surviving finding.',
+        'If no issues found, return: []',
+    ];
+}
 const BROAD_REVIEW_REBUTTAL_BATCH_SIZE = 2;
 
 /**
@@ -240,11 +255,19 @@ function splitDisputedIntoBatches(disputed, options = {}) {
  */
 export function buildInitialReviewPrompt(session) {
     return [
+        DEBATE_PROMPT_MARKER,
         'You are participating in a structured multi-agent code review debate.',
         ...buildScopeGuidance(session),
         'Ignore any stale review outputs, handoff artifacts, debate transcripts, or session history unless the prompt explicitly asks for them.',
         'This is not a review of debate artifacts or orchestration prompts.',
-        'Use the normal review schema expected by your adapter.',
+        'Review the requested code scope directly.',
+        'You may inspect other files only if needed to verify a concrete interaction or call site.',
+        'Do not inspect git diff, git history, or unrelated files unless the prompt explicitly asks for that.',
+        'Report only findings supported by the code you actually inspected.',
+        'Prefer fewer, stronger findings over a long list of weak suspicions.',
+        'For every finding, explain why it matters in production and give a concrete remediation that another agent can implement directly.',
+        '',
+        ...debateOutputInstructions(),
         '',
         'Original review prompt:',
         session.prompt,
@@ -259,13 +282,17 @@ export function buildInitialReviewPrompt(session) {
  */
 export function buildRebuttalPrompt(disputed, round, session = {}) {
     return [
+        DEBATE_PROMPT_MARKER,
         `Debate round ${round}: reconsider only the disputed findings listed below.`,
         ...buildScopeGuidance(session),
         'Re-review the same target scope. Do not broaden this into a fresh repo audit.',
         'This is not a review of debate artifacts, prompts, or orchestration state.',
         'The disputed findings are already included below. Do not ask for them again.',
-        'Return ONLY a JSON array containing the disputed issues you still believe are valid.',
+        '',
+        'Return ONLY a raw JSON array containing the disputed issues you still believe are valid.',
+        'Do not wrap in markdown fences.',
         'If you keep a finding, copy the exact dedupeKey from the disputed findings JSON.',
+        'For each finding you keep, include a "rationale" field explaining WHY you still believe it is valid after re-review.',
         'If you now disagree with a disputed issue, omit it from your output.',
         '',
         'Original review prompt:',
@@ -279,22 +306,63 @@ export function buildRebuttalPrompt(disputed, round, session = {}) {
 /**
  * @param {FindingEntry[]} disputed
  * @param {import('./session.js').Session|{ prompt?: string, reviewOptions?: Record<string, any>|null }} [session]
+ * @param {EvaluationEntry[]} [evaluations]
  * @returns {string}
  */
-export function buildTieBreakPrompt(disputed, session = {}) {
+export function buildTieBreakPrompt(disputed, session = {}, evaluations = []) {
+    const disputeContext = buildDisputeContext(disputed, evaluations);
     return [
+        DEBATE_PROMPT_MARKER,
         'You are the tie-break reviewer for disputed findings.',
         ...buildScopeGuidance(session),
         'Do not audit debate artifacts, prompts, or repository instructions.',
-        'Return ONLY a JSON array containing the disputed issues that should survive final resolution.',
+        'Review the target code yourself and make an independent judgment on each disputed finding.',
+        '',
+        'Return ONLY a raw JSON array containing the disputed issues that should survive final resolution.',
+        'Do not wrap in markdown fences.',
         'If you keep a finding, copy the exact dedupeKey from the disputed findings JSON.',
+        'For each finding you keep, include a "rationale" field explaining your independent assessment.',
         '',
         'Original review prompt:',
         session.prompt ?? '(not provided)',
         '',
+        ...(disputeContext.length > 0 ? [
+            'Agent disagreements (why each finding is disputed):',
+            ...disputeContext,
+            '',
+        ] : []),
         'Disputed findings JSON (exact items to adjudicate):',
         formatDisputedFindingsJson(disputed),
     ].join('\n');
+}
+
+/**
+ * Build human-readable context about why findings are disputed.
+ * @param {FindingEntry[]} disputed
+ * @param {EvaluationEntry[]} evaluations
+ * @returns {string[]}
+ */
+function buildDisputeContext(disputed, evaluations) {
+    if (evaluations.length === 0) return [];
+
+    /** @type {Map<string, EvaluationEntry[]>} */
+    const evalsByKey = new Map();
+    for (const ev of evaluations) {
+        const existing = evalsByKey.get(ev.dedupeKey) ?? [];
+        existing.push(ev);
+        evalsByKey.set(ev.dedupeKey, existing);
+    }
+
+    const lines = [];
+    for (const finding of disputed) {
+        const evalsForThis = evalsByKey.get(finding.dedupeKey) ?? [];
+        if (evalsForThis.length === 0) continue;
+
+        const accepted = evalsForThis.filter(e => e.verdict === 'accepted').map(e => e.agentId);
+        const rejected = evalsForThis.filter(e => e.verdict === 'rejected').map(e => e.agentId);
+        lines.push(`- ${finding.dedupeKey} "${finding.title}": accepted by [${accepted.join(', ')}], rejected by [${rejected.join(', ')}]`);
+    }
+    return lines;
 }
 
 /**
@@ -833,7 +901,7 @@ export class DebateExecutor {
         const { stream, done } = adapter.execute(
             this.session.id,
             this.resolveExecutionPath(decider),
-            buildTieBreakPrompt(this.disputedFindings, this.session),
+            buildTieBreakPrompt(this.disputedFindings, this.session, this.evaluations),
             { timeouts: this.getPhaseTimeouts(decider, 'tie_break') },
         );
 

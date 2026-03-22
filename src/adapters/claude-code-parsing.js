@@ -17,6 +17,9 @@
 
 import { createEvent, createFinding } from '../schema/events.js';
 
+/** Marker that signals a prompt already contains debate instructions — adapters skip wrapping. */
+export const DEBATE_PROMPT_MARKER = '__DEBATE_PROMPT__';
+
 // ── Prompt Template ─────────────────────────────────
 
 /**
@@ -28,6 +31,11 @@ import { createEvent, createFinding } from '../schema/events.js';
  * @returns {string}
  */
 export function buildReviewPrompt(prompt, contextSnippet) {
+    // Debate prompts already contain output instructions — pass through verbatim.
+    if (prompt.includes(/** @type {string} */ ('__DEBATE_PROMPT__'))) {
+        return prompt;
+    }
+
     const parts = [
         prompt,
         '',
@@ -273,7 +281,14 @@ function tryDirectParse(jsonStr) {
         if (arr.length === 0) return [];
 
         return arr
-            .filter((/** @type {any} */ item) => item && (item.summary || item.title || item.description || item.issue))
+            .filter((/** @type {any} */ item) => item && (
+                item.summary
+                || item.title
+                || item.description
+                || item.issue
+                || item.dedupeKey
+                || item.dedupe_key
+            ))
             .map(normalizeClaudeFinding);
     } catch {
         return null;
@@ -285,22 +300,25 @@ function tryDirectParse(jsonStr) {
  * @returns {import('../schema/events.js').Finding}
  */
 function normalizeClaudeFinding(item) {
-    const finding = createFinding({
-        summary: item.summary || item.title || item.issue || item.description || 'Untitled finding',
-        evidence: item.evidence || item.detail || item.description || item.why_it_matters || item.fix_instructions || item.recommendation || item.suggestion || '',
-        severity: mapSeverity(item.severity),
-        file: item.file || '(review)',
-        line: typeof item.line === 'number' ? item.line : null,
-        confidence: normalizeConfidence(item.confidence),
-        fix_instructions: item.fix_instructions || item.recommendation || item.suggestion || null,
-        why_it_matters: item.why_it_matters || item.impact || item.risk || null,
-    });
-
     const explicitDedupeKey = typeof item.dedupeKey === 'string'
         ? item.dedupeKey.trim()
         : typeof item.dedupe_key === 'string'
             ? item.dedupe_key.trim()
             : '';
+    const rationale = typeof item.rationale === 'string'
+        ? item.rationale.trim()
+        : '';
+    const finding = createFinding({
+        summary: item.summary || item.title || item.issue || item.description || explicitDedupeKey || 'Untitled finding',
+        evidence: item.evidence || item.detail || item.description || rationale || item.why_it_matters || item.fix_instructions || item.recommendation || item.suggestion || '',
+        severity: mapSeverity(item.severity),
+        file: item.file || '(review)',
+        line: typeof item.line === 'number' ? item.line : null,
+        confidence: normalizeConfidence(item.confidence),
+        fix_instructions: item.fix_instructions || item.recommendation || item.suggestion || null,
+        why_it_matters: item.why_it_matters || item.impact || item.risk || rationale || null,
+    });
+
     if (explicitDedupeKey) {
         finding.dedupe_key = explicitDedupeKey;
     }

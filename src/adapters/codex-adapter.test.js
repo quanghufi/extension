@@ -2,7 +2,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { CodexAdapter, mapSeverity } from './codex-adapter.js';
-import { formatReviewPrompt } from './codex-adapter-parsing.js';
+import { formatReviewPrompt, DEBATE_PROMPT_MARKER } from './codex-adapter-parsing.js';
 
 describe('CodexAdapter', () => {
     it('has agentId "codex"', () => {
@@ -91,6 +91,13 @@ describe('formatReviewPrompt', () => {
         assert.match(prompt, /You may inspect other files only if needed/i);
         assert.match(prompt, /Return the final answer as a JSON object/i);
         assert.match(prompt, /status, summary, findings, fix_plan, rerun_review/i);
+    });
+
+    it('skips wrapping when prompt contains DEBATE_PROMPT_MARKER (no double-wrap)', () => {
+        const debatePrompt = 'Review the disputed findings. Return a JSON array.\n__DEBATE_PROMPT__';
+        const result = formatReviewPrompt(debatePrompt);
+        assert.equal(result, debatePrompt);
+        assert.doesNotMatch(result, /Return the final answer as a JSON object/);
     });
 });
 
@@ -208,6 +215,54 @@ describe('CodexAdapter.parseResult', () => {
         assert.equal(findings[0].confidence, 0.9);
         assert.equal(findings[0].fix_instructions, 'Reject on error and aborted.');
         assert.equal(findings[0].why_it_matters, 'Routes can hang forever.');
+    });
+
+    it('extracts adjudication findings from summary when schema wrapper has empty findings', () => {
+        const output = JSON.stringify({
+            type: 'item.completed',
+            item: {
+                type: 'agent_message',
+                text: JSON.stringify({
+                    status: 'has_findings',
+                    summary: JSON.stringify([
+                        {
+                            dedupeKey: 'unbounded_body_read',
+                            rationale: 'The body reader still has no maximum size limit.',
+                        },
+                    ]),
+                    findings: [],
+                    fix_plan: [],
+                    rerun_review: false,
+                }),
+            },
+        });
+
+        const findings = adapter.parseResult(output, 'sess-1');
+        assert.equal(findings.length, 1);
+        assert.equal(findings[0].dedupe_key, 'unbounded_body_read');
+        assert.equal(findings[0].summary, 'unbounded_body_read');
+        assert.match(findings[0].evidence, /maximum size limit/i);
+    });
+
+    it('preserves explicit dedupeKey for minimal rebuttal adjudication items', () => {
+        const output = JSON.stringify({
+            type: 'item.completed',
+            item: {
+                type: 'agent_message',
+                text: JSON.stringify([
+                    {
+                        dedupeKey: 'f234f4172055c6b9',
+                        rationale: 'The request can still hang forever on abort.',
+                    },
+                ]),
+            },
+        });
+
+        const findings = adapter.parseResult(output, 'sess-1');
+        assert.equal(findings.length, 1);
+        assert.equal(findings[0].dedupe_key, 'f234f4172055c6b9');
+        assert.equal(findings[0].summary, 'f234f4172055c6b9');
+        assert.match(findings[0].evidence, /hang forever on abort/i);
     });
 });
 

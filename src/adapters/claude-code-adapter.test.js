@@ -8,6 +8,7 @@ import {
     parseStreamLine,
     parseClaudeResult,
     mapSeverity,
+    DEBATE_PROMPT_MARKER,
 } from './claude-code-parsing.js';
 
 // ── ClaudeCodeAdapter ────────────────────────────────
@@ -96,6 +97,13 @@ describe('buildReviewPrompt', () => {
         const prompt = buildReviewPrompt('Review', 'const x = 1;');
         assert.ok(prompt.includes('const x = 1;'));
         assert.ok(prompt.includes('Code Context'));
+    });
+
+    it('skips wrapping when prompt contains DEBATE_PROMPT_MARKER (no double-wrap)', () => {
+        const debatePrompt = 'Reconsider disputed findings.\n__DEBATE_PROMPT__';
+        const result = buildReviewPrompt(debatePrompt);
+        assert.equal(result, debatePrompt);
+        assert.doesNotMatch(result, /Format your response as:.*json/);
     });
 });
 
@@ -247,6 +255,19 @@ describe('parseClaudeResult', () => {
         assert.equal(findings[0].dedupe_key, 'abc123samefinding');
         assert.equal(findings[0].confidence, 0.9);
         assert.equal(findings[0].summary, 'Renamed wording for the same disputed issue');
+    });
+
+    it('parses minimal adjudication items with only dedupeKey and rationale', () => {
+        const output = JSON.stringify({
+            type: 'result', subtype: 'success',
+            result: '```json\n[{"dedupeKey":"unbounded_body_read","rationale":"The function still accumulates an unlimited request body in memory."}]\n```',
+        });
+
+        const findings = parseClaudeResult(output, 'sess-1');
+        assert.equal(findings.length, 1);
+        assert.equal(findings[0].dedupe_key, 'unbounded_body_read');
+        assert.equal(findings[0].summary, 'unbounded_body_read');
+        assert.match(findings[0].evidence, /unlimited request body/i);
     });
 
     it('extracts findings from object wrapper with findings array', () => {

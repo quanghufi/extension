@@ -14,7 +14,14 @@
       "Bash(where codex:*)",
       "Bash(codex --version)",
       "Bash(where claude:*)",
-      "Bash(node -e:*)"
+      "Bash(node -e:*)",
+      "Bash(npm pack:*)",
+      "Bash(timeout 3 node src/mcp-server.js)",
+      "Bash(node --test src/mcp-server.test.js)",
+      "Bash(tar tzf:*)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(''''SDK version:'''', d.get\\(''''version''''\\)\\); print\\(''''Main:'''', d.get\\(''''main''''\\)\\); print\\(''''Exports:'''', list\\(d.get\\(''''exports'''', {}\\).keys\\(\\)\\)[:5]\\)\")",
+      "Bash(gh auth:*)",
+      "Bash(gh release:*)"
     ]
   }
 }
