@@ -10,6 +10,7 @@ plans/
 scripts/
 tmp/
 data/
+src/data/
 node_modules/
 
 # Tests
@@ -22,3 +23,4 @@ AGENTS.md
 SKILL.md
 .gitignore
 .npmignore
+*.tgz

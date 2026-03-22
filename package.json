@@ -12,7 +12,8 @@
     "src/",
     "!src/**/*.test.js",
     "!src/mcp/tests/",
-    "!src/mcp/__pycache__/"
+    "!src/mcp/__pycache__/",
+    "!src/data/sessions/"
   ],
   "engines": {
     "node": ">=20.0.0"
