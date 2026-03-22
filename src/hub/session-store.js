@@ -63,7 +63,19 @@ export class SessionStore {
         try {
             const raw = fs.readFileSync(filePath, 'utf-8');
             const data = JSON.parse(raw);
-            return Session.fromJSON(data);
+            const session = Session.fromJSON(data);
+
+            // Ghost debate recovery: if debateActive is true on disk, no
+            // background executor owns this session (we just loaded from
+            // cold storage). Mark as failed so collab tools are unblocked.
+            if (session.debateActive) {
+                session.debateActive = false;
+                if (session.debateState && session.debateState !== 'resolved') {
+                    session.debateState = 'failed';
+                }
+            }
+
+            return session;
         } catch {
             return null; // Corrupted file
         }

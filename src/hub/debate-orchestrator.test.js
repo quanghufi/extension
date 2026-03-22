@@ -50,12 +50,12 @@ describe('debate-orchestrator', () => {
                 },
             ], 1, fileScopedSession);
             assert.match(prompt, /re-review the same target scope/i);
-            assert.match(prompt, /Original review prompt:/i);
+            assert.match(prompt, /BEGIN ORIGINAL REVIEW PROMPT/i);
             assert.match(prompt, /src\/http-utils\.js/);
             assert.match(prompt, /not a review of debate artifacts/i);
             assert.match(prompt, /The disputed findings are already included below\. Do not ask for them again\./i);
             assert.match(prompt, /Disputed findings JSON \(exact items to adjudicate\):/i);
-            assert.match(prompt, /copy the exact dedupeKey/i);
+            assert.match(prompt, /copy ALL fields from the disputed findings JSON/i);
             assert.match(prompt, /Return ONLY a raw JSON array/i);
             assert.match(prompt, /Do not wrap in markdown fences/i);
             assert.match(prompt, /rationale.*why you still believe/i);
@@ -907,6 +907,153 @@ describe('debate-orchestrator', () => {
                 executor.transition('start');
                 assert.equal(messages.length, 1);
                 assert.ok(messages[0].includes('idle → reviewing'));
+            });
+        });
+
+        describe('retry and fallback', () => {
+            it('retries a failed agent up to 3 times before giving up', async () => {
+                const session = createMockSession();
+                session.id = 'sess-retry';
+                session.projectDir = '/project';
+                session.snapshotPath = '/snapshot';
+                session.debateRound = 0;
+                session.debateAgents = ['codex'];
+
+                let callCount = 0;
+                const executor = new DebateExecutor({
+                    session,
+                    adapterMap: {
+                        codex: {
+                            execute: () => {
+                                callCount++;
+                                if (callCount < 3) {
+                                    return {
+                                        stream: (async function* () {})(),
+                                        done: Promise.resolve({
+                                            status: 'error',
+                                            findings: [],
+                                            timingMs: { firstByteMs: 0, lastIdleGapMs: 0, totalMs: 0 },
+                                        }),
+                                    };
+                                }
+                                return {
+                                    stream: (async function* () {})(),
+                                    done: Promise.resolve({
+                                        status: 'ok',
+                                        findings: [{ id: 'f1', dedupe_key: 'dk1', summary: 'Bug', severity: 'high' }],
+                                        timingMs: { firstByteMs: 0, lastIdleGapMs: 0, totalMs: 0 },
+                                    }),
+                                };
+                            },
+                        },
+                    },
+                });
+
+                // Override baseDelayMs to 0 so test runs instantly
+                executor._executeAgentWithRetry = executor._executeAgentWithRetry.bind(executor);
+                const origMethod = executor._executeAgentWithRetry;
+                executor._executeAgentWithRetry = (agentId, opts) => origMethod(agentId, opts, { maxRetries: 3, baseDelayMs: 0 });
+
+                await executor.runReviewPass(['codex'], {
+                    phase: 'review',
+                    prompt: 'Review this',
+                });
+
+                assert.equal(callCount, 3, 'Should have retried until success on 3rd attempt');
+                assert.equal(executor.rawFindingsByAgent.get('codex')?.length, 1);
+            });
+
+            it('falls back to surviving agent when one agent exhausts retries in 2-agent debate', async () => {
+                const session = createMockSession();
+                session.id = 'sess-fallback';
+                session.projectDir = '/project';
+                session.snapshotPath = '/snapshot';
+                session.debateRound = 0;
+                session.debateAgents = ['codex', 'claude-code'];
+
+                const messages = [];
+                const executor = new DebateExecutor({
+                    session,
+                    onSystemMessage: (msg) => messages.push(msg),
+                    adapterMap: {
+                        codex: {
+                            execute: () => ({
+                                stream: (async function* () {})(),
+                                done: Promise.resolve({
+                                    status: 'ok',
+                                    findings: [{ id: 'f1', dedupe_key: 'dk1', summary: 'Bug', severity: 'high' }],
+                                    timingMs: { firstByteMs: 0, lastIdleGapMs: 0, totalMs: 0 },
+                                }),
+                            }),
+                        },
+                        'claude-code': {
+                            execute: () => ({
+                                stream: (async function* () {})(),
+                                done: Promise.resolve({
+                                    status: 'error',
+                                    findings: [],
+                                    timingMs: { firstByteMs: 0, lastIdleGapMs: 0, totalMs: 0 },
+                                }),
+                            }),
+                        },
+                    },
+                });
+
+                // Override to skip delays
+                const origMethod = executor._executeAgentWithRetry.bind(executor);
+                executor._executeAgentWithRetry = (agentId, opts) => origMethod(agentId, opts, { maxRetries: 3, baseDelayMs: 0 });
+
+                await executor.runReviewPass(['codex', 'claude-code'], {
+                    phase: 'review',
+                    prompt: 'Review this',
+                });
+
+                // Codex findings should survive
+                assert.equal(executor.rawFindingsByAgent.get('codex')?.length, 1);
+                // Claude-code should have no findings (failed)
+                assert.equal(executor.rawFindingsByAgent.has('claude-code'), false);
+                // System messages about failure and fallback
+                assert.ok(messages.some(m => /claude-code.*failed.*3 attempts/i.test(m)),
+                    'Should emit system message about agent failure');
+                assert.ok(messages.some(m => /surviving agent/i.test(m)),
+                    'Should emit system message about single-agent fallback');
+            });
+
+            it('throws when ALL agents fail after retries (no survivor)', async () => {
+                const session = createMockSession();
+                session.id = 'sess-all-fail';
+                session.projectDir = '/project';
+                session.snapshotPath = '/snapshot';
+                session.debateRound = 0;
+                session.debateAgents = ['codex'];
+
+                const executor = new DebateExecutor({
+                    session,
+                    adapterMap: {
+                        codex: {
+                            execute: () => ({
+                                stream: (async function* () {})(),
+                                done: Promise.resolve({
+                                    status: 'error',
+                                    findings: [],
+                                    timingMs: { firstByteMs: 0, lastIdleGapMs: 0, totalMs: 0 },
+                                }),
+                            }),
+                        },
+                    },
+                });
+
+                // Override to skip delays
+                const origMethod = executor._executeAgentWithRetry.bind(executor);
+                executor._executeAgentWithRetry = (agentId, opts) => origMethod(agentId, opts, { maxRetries: 3, baseDelayMs: 0 });
+
+                await assert.rejects(
+                    () => executor.runReviewPass(['codex'], {
+                        phase: 'review',
+                        prompt: 'Review this',
+                    }),
+                    /all agents failed/i,
+                );
             });
         });
     });

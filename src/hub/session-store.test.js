@@ -1,8 +1,9 @@
 // @ts-check
-import { describe, it, before, after } from 'node:test';
+import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { SessionStore } from './session-store.js';
 import { Session } from './session.js';
 
@@ -95,5 +96,70 @@ describe('SessionStore', () => {
         assert.ok(sanitized);
         // Should not have created file outside sessionsDir
         assert.ok(!fs.existsSync(path.resolve(TEST_DATA_DIR, '../../../attack.json')));
+    });
+});
+
+describe('SessionStore — ghost debate recovery', () => {
+    /** @type {string} */
+    let tempDir;
+    /** @type {SessionStore} */
+    let store;
+
+    beforeEach(() => {
+        tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-store-test-'));
+        store = new SessionStore(tempDir);
+    });
+
+    afterEach(() => {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('recovers session with debateActive=true on load', () => {
+        const session = new Session({
+            projectDir: '/test/project',
+            prompt: 'Review this code',
+        });
+        session.debateActive = true;
+        session.debateState = 'reviewing';
+        session.debateAgents = ['codex', 'claude-code'];
+        store.save(session);
+
+        const loaded = store.load(session.id);
+
+        assert.equal(loaded.debateActive, false,
+            'debateActive should be false after recovery');
+        assert.equal(loaded.debateState, 'failed',
+            'debateState should be failed after recovery');
+    });
+
+    it('does not modify sessions without active debate', () => {
+        const session = new Session({
+            projectDir: '/test/project',
+            prompt: 'Review this code',
+        });
+        session.debateActive = false;
+        session.debateState = 'resolved';
+        store.save(session);
+
+        const loaded = store.load(session.id);
+
+        assert.equal(loaded.debateActive, false);
+        assert.equal(loaded.debateState, 'resolved');
+    });
+
+    it('clears debateActive even when debateState is already resolved', () => {
+        const session = new Session({
+            projectDir: '/test/project',
+            prompt: 'Review this code',
+        });
+        session.debateActive = true;
+        session.debateState = 'resolved';
+        store.save(session);
+
+        const loaded = store.load(session.id);
+
+        assert.equal(loaded.debateActive, false);
+        // debateState stays 'resolved' since it's already terminal
+        assert.equal(loaded.debateState, 'resolved');
     });
 });

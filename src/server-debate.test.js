@@ -286,18 +286,31 @@ describe('HubServer debate orchestration', () => {
 
             await new Promise((resolve) => setTimeout(resolve, 25));
 
-            const persistedDuringStartup = server.store.load(session.id);
-            assert.ok(persistedDuringStartup);
-            assert.equal(persistedDuringStartup.debateActive, true);
-            assert.equal(persistedDuringStartup.debateState, 'reviewing');
-            assert.ok(persistedDuringStartup.events.some((event) => event.event_type === 'debate_started'));
+            // Verify state was persisted to disk during startup.
+            // Note: store.load() applies ghost debate recovery (debateActive
+            // is cleared on cold load because no background executor owns it).
+            // The in-memory session (via activeSessions) is the live reference.
+            const activeDuringStartup = server.activeSessions.get(session.id);
+            assert.ok(activeDuringStartup);
+            assert.equal(activeDuringStartup.debateActive, true);
+            assert.equal(activeDuringStartup.debateState, 'reviewing');
+            assert.ok(activeDuringStartup.events.some((event) => event.event_type === 'debate_started'));
+
+            // Cold load from disk triggers ghost recovery — this is expected.
+            const coldLoadDuringStartup = server.store.load(session.id);
+            assert.ok(coldLoadDuringStartup);
+            assert.equal(coldLoadDuringStartup.debateActive, false,
+                'Ghost recovery clears debateActive on cold load');
+            assert.equal(coldLoadDuringStartup.debateState, 'failed',
+                'Ghost recovery transitions non-terminal debateState to failed');
 
             server.activeSessions.delete(session.id);
 
+            // After removing from activeSessions, cold load still recovers.
             const persistedAfterActiveDrop = server.store.load(session.id);
             assert.ok(persistedAfterActiveDrop);
-            assert.equal(persistedAfterActiveDrop.debateActive, true);
-            assert.equal(persistedAfterActiveDrop.debateState, 'reviewing');
+            assert.equal(persistedAfterActiveDrop.debateActive, false);
+            assert.equal(persistedAfterActiveDrop.debateState, 'failed');
 
             releaseReviews();
             const result = await debatePromise;

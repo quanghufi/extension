@@ -169,8 +169,8 @@ export class ConsensusEngine {
         }
 
         const total = uniqueFindings.length;
-        const agreedCount = agreed.length;
-        const ratio = total > 0 ? agreedCount / total : 1.0;
+        const consensusCount = agreed.length + dropped.length;
+        const ratio = total > 0 ? consensusCount / total : 1.0;
 
         return { ratio, agreed, disputed, dropped };
     }

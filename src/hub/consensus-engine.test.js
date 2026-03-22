@@ -71,7 +71,7 @@ describe('consensus-engine', () => {
             assert.equal(result.agreed.length, 1);
         });
 
-        it('all evaluators reject → dropped, ratio 0.0', () => {
+        it('all evaluators reject → dropped, ratio 1.0 (rejection is consensus)', () => {
             const findings = [
                 { dedupeKey: 'f1', severity: 'low', title: 'False positive', agentId: 'codex' },
             ];
@@ -79,7 +79,7 @@ describe('consensus-engine', () => {
                 { dedupeKey: 'f1', verdict: 'rejected', agentId: 'claude-code' },
             ];
             const result = engine.calculateAgreement(findings, evaluations);
-            assert.equal(result.ratio, 0.0);
+            assert.equal(result.ratio, 1.0);
             assert.equal(result.dropped.length, 1);
             assert.equal(result.agreed.length, 0);
         });
@@ -112,8 +112,8 @@ describe('consensus-engine', () => {
             assert.equal(result.agreed.length, 2);
             assert.equal(result.dropped.length, 1);
             assert.equal(result.disputed.length, 0);
-            // ratio = 2/3
-            assert.ok(Math.abs(result.ratio - 2 / 3) < 0.001);
+            // ratio = (2 agreed + 1 dropped) / 3 = 1.0
+            assert.equal(result.ratio, 1.0);
         });
 
         it('single agent → all uncontested (trivial consensus)', () => {
@@ -142,7 +142,56 @@ describe('consensus-engine', () => {
             assert.equal(result.agreed[0].dedupeKey, 'f1');
             assert.equal(result.dropped.length, 1);
             assert.equal(result.dropped[0].dedupeKey, 'f2');
-            assert.equal(result.ratio, 0.5);
+            assert.equal(result.ratio, 1.0);
+        });
+
+        it('counts dropped findings as consensus (not just agreed)', () => {
+            const engine = new ConsensusEngine({ threshold: 0.7 });
+
+            // 3 findings: 1 agreed, 1 dropped (both reject), 1 disputed
+            const findings = [
+                { dedupeKey: 'f1', severity: 'high', title: 'Real bug', agentId: 'codex' },
+                { dedupeKey: 'f2', severity: 'low', title: 'False positive', agentId: 'codex' },
+                { dedupeKey: 'f3', severity: 'medium', title: 'Debatable', agentId: 'codex' },
+            ];
+            const evaluations = [
+                { dedupeKey: 'f1', verdict: 'accepted', agentId: 'claude-code' },
+                { dedupeKey: 'f2', verdict: 'rejected', agentId: 'claude-code' },
+                { dedupeKey: 'f2', verdict: 'rejected', agentId: 'codex' },
+                { dedupeKey: 'f3', verdict: 'accepted', agentId: 'codex' },
+                { dedupeKey: 'f3', verdict: 'rejected', agentId: 'claude-code' },
+            ];
+
+            const result = engine.calculateAgreement(findings, evaluations);
+
+            assert.equal(result.agreed.length, 1);
+            assert.equal(result.dropped.length, 1);
+            assert.equal(result.disputed.length, 1);
+
+            const expected = 2 / 3;
+            assert.ok(Math.abs(result.ratio - expected) < 0.01,
+                `Expected ratio ~${expected.toFixed(3)} but got ${result.ratio.toFixed(3)}`);
+        });
+
+        it('returns ratio 1.0 when all findings are dropped (full rejection consensus)', () => {
+            const engine = new ConsensusEngine({ threshold: 0.7 });
+
+            const findings = [
+                { dedupeKey: 'f1', severity: 'low', title: 'FP1', agentId: 'codex' },
+                { dedupeKey: 'f2', severity: 'low', title: 'FP2', agentId: 'codex' },
+            ];
+            const evaluations = [
+                { dedupeKey: 'f1', verdict: 'rejected', agentId: 'claude-code' },
+                { dedupeKey: 'f1', verdict: 'rejected', agentId: 'codex' },
+                { dedupeKey: 'f2', verdict: 'rejected', agentId: 'claude-code' },
+                { dedupeKey: 'f2', verdict: 'rejected', agentId: 'codex' },
+            ];
+
+            const result = engine.calculateAgreement(findings, evaluations);
+            assert.equal(result.ratio, 1.0);
+            assert.equal(result.agreed.length, 0);
+            assert.equal(result.dropped.length, 2);
+            assert.equal(result.disputed.length, 0);
         });
     });
 
