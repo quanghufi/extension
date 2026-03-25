@@ -136,7 +136,7 @@ describe('buildMcpServer', () => {
         }
     });
 
-    it('exposes dual debate tool without caller-controlled agent fields', async () => {
+    it('exposes dual debate tool as a fixed codex-first single-round flow', async () => {
         const testDir = path.dirname(fileURLToPath(import.meta.url));
         const serverPath = path.join(testDir, 'mcp-server.js');
         const client = new Client({ name: 'mcp-server-test-client', version: '1.0.0' });
@@ -154,10 +154,11 @@ describe('buildMcpServer', () => {
 
             assert.ok(dualTool);
             const properties = dualTool.inputSchema.properties ?? {};
+            assert.ok(!('agentId' in properties));
             assert.ok(!('agents' in properties));
             assert.ok(!('decider' in properties));
-            assert.ok('maxRounds' in properties);
-            assert.ok('consensusThreshold' in properties);
+            assert.ok(!('maxRounds' in properties));
+            assert.ok(!('consensusThreshold' in properties));
         } finally {
             await client.close();
         }
@@ -183,13 +184,15 @@ describe('buildMcpServer', () => {
                     reviewTarget: 'file',
                     filePath: 'src/http-utils.js',
                     prompt: 'Review only src/http-utils.js',
-                    maxRounds: 2,
                 },
             }, undefined, { timeout: 720000 });
             const payload = JSON.parse(result.content[0].text);
 
             assert.equal(payload.storage.persisted, true);
             assert.equal(typeof payload.storage.storePath, 'string');
+            assert.equal(payload.reviewAgent, 'codex');
+            assert.equal(payload.maxRounds, 1);
+            assert.equal(payload.debateMode, 'codex_findings_only');
             const expectedSessionsDir = path.join(testDir, 'data', 'sessions');
             assert.ok(payload.storage.storePath.startsWith(expectedSessionsDir));
             assert.match(payload.storage.storePath, /sessions[\\/].+\.json$/i);

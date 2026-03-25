@@ -491,16 +491,13 @@ function buildMcpServer() {
 
     mcpServer.tool(
         'hub_create_review_and_start_dual_debate',
-        'Create a new review session, wait for completion, then start a mandatory dual-agent debate with codex and claude-code',
+        'Create a Codex review, then Claude Code independently judges each finding with verdict + rationale + suggested fix. Returns all Codex findings annotated with Claude verdicts for user decision.',
         {
             projectDir: z.string().describe('Project directory to review'),
             prompt: z.string().optional().describe('Review instructions/prompt. For single-file review, start with "Review only <filePath>" and keep scope anchored to that file.'),
-            agentId: z.string().optional().describe('Review agent ID (default: codex)'),
             reviewTarget: z.string().optional().describe('Review target. Must be "file" when filePath is provided.'),
             filePath: z.string().optional().describe('Specific file to review. Required when reviewing a single file.'),
             maxFindings: z.number().optional().describe('Max findings to return from the review (default: 10)'),
-            maxRounds: z.number().optional().describe('Maximum debate rounds (default: 3)'),
-            consensusThreshold: z.number().optional().describe('Agreement threshold 0.0-1.0 (default: 0.7)'),
         },
         async (args) => {
             const server = await hub.ensureReady(args.projectDir);
@@ -509,6 +506,8 @@ function buildMcpServer() {
             try {
                 const debateAgents = ['codex', 'claude-code'];
                 const decider = 'codex';
+                const reviewAgent = 'codex';
+                const fixedMaxRounds = 1;
                 const invalidReviewArgs = validateReviewScopeArgs(args);
                 if (invalidReviewArgs) {
                     hub.state = STATES.READY;
@@ -521,7 +520,7 @@ function buildMcpServer() {
                         reviewTarget: args.reviewTarget ?? 'uncommitted',
                         filePath: args.filePath,
                     }),
-                    agentId: args.agentId ?? 'codex',
+                    agentId: reviewAgent,
                 });
                 preflightSession.state = 'completed';
                 const invalid = validateDebateRequest(preflightSession, {
@@ -534,7 +533,10 @@ function buildMcpServer() {
                     return invalid;
                 }
 
-                const session = createReviewSession(server, args);
+                const session = createReviewSession(server, {
+                    ...args,
+                    agentId: reviewAgent,
+                });
                 hub.trackSession(session.id, session.projectDir);
                 server.runSession(session.id).catch((err) => {
                     console.error(`[MCP] runSession error for ${session.id}:`, err);
@@ -558,27 +560,47 @@ function buildMcpServer() {
                     return invalidAfterReview;
                 }
 
+                if (completed.allFindings.length === 0) {
+                    hub.state = STATES.READY;
+                    return createMcpResult(JSON.stringify({
+                        sessionId: completed.id,
+                        reviewAgent,
+                        reviewState: completed.state,
+                        findingCount: 0,
+                        debateState: 'skipped',
+                        debateRound: 0,
+                        debateActive: false,
+                        debateMode: 'codex_findings_only',
+                        agents: debateAgents,
+                        storage,
+                        maxRounds: fixedMaxRounds,
+                        decider,
+                        message: 'Codex review completed with 0 findings — Claude Code judge evaluation skipped.',
+                    }, null, 2));
+                }
+
                 startDebateInBackground(server, completed.id, {
                     agents: debateAgents,
-                    maxRounds: args.maxRounds,
+                    maxRounds: fixedMaxRounds,
                     decider,
-                    consensusThreshold: args.consensusThreshold,
+                    seedFindings: completed.allFindings,
                 });
 
                 hub.state = STATES.READY;
                 return createMcpResult(JSON.stringify({
                     sessionId: completed.id,
+                    reviewAgent,
                     reviewState: completed.state,
                     findingCount: completed.allFindings.length,
                     debateState: 'starting',
                     debateRound: completedSession.debateRound,
                     debateActive: true,
+                    debateMode: 'codex_findings_only',
                     agents: debateAgents,
                     storage,
-                    maxRounds: args.maxRounds ?? 3,
+                    maxRounds: fixedMaxRounds,
                     decider,
-                    consensusThreshold: args.consensusThreshold ?? 0.7,
-                    message: 'Review completed and dual-agent debate started on the same session.',
+                    message: 'Codex review completed. Claude Code judge evaluation started — will annotate each finding with verdict, rationale, and suggested fix.',
                 }, null, 2));
             } catch (err) {
                 hub.state = STATES.READY;
@@ -653,6 +675,7 @@ function buildMcpServer() {
                         totalRaw: session.allFindings.length,
                         rebuttals: session.rebuttals,
                         rebuttalOutcomes: session.rebuttalOutcomes,
+                        judgeVerdicts: session.judgeVerdicts ?? null,
                     }, null, 2),
                 }],
             };

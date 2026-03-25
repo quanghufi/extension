@@ -322,6 +322,16 @@ describe('Session watchdog', () => {
         assert.equal(watchdog.thresholdMs, 900000);
     });
 
+    it('does not mark codex stalled before its extended review hard-timeout window', () => {
+        const s = new Session({ projectDir: '/project', prompt: 'review', agentId: 'codex' });
+        s.start();
+        s.createdAt = '2026-03-11T00:00:00.000Z';
+
+        const watchdog = s.getWatchdogStatus(Date.parse('2026-03-11T00:10:30.000Z'));
+        assert.equal(watchdog.stalled, false);
+        assert.equal(watchdog.thresholdMs, 660000);
+    });
+
     it('embeds watchdog and displayState in JSON', () => {
         const s = new Session({ projectDir: '/project', prompt: 'review' });
         s.start();

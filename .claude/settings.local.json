@@ -22,7 +22,9 @@
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(''''SDK version:'''', d.get\\(''''version''''\\)\\); print\\(''''Main:'''', d.get\\(''''main''''\\)\\); print\\(''''Exports:'''', list\\(d.get\\(''''exports'''', {}\\).keys\\(\\)\\)[:5]\\)\")",
       "Bash(gh auth:*)",
       "Bash(gh release:*)",
-      "Bash(npx --no-install node --test src/hub/consensus-engine.test.js)"
+      "Bash(npx --no-install node --test src/hub/consensus-engine.test.js)",
+      "mcp__neural-memory__nmem_remember_batch",
+      "Bash(npx node:*)"
     ]
   }
 }

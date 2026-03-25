@@ -323,6 +323,19 @@ function normalizeClaudeFinding(item) {
         finding.dedupe_key = explicitDedupeKey;
     }
 
+    // Preserve judge-mode fields when present (verdict, rationale, suggested_fix).
+    // These are NOT part of the core Finding schema but are carried through
+    // so buildJudgeVerdicts can extract them later.
+    if (typeof item.verdict === 'string') {
+        /** @type {any} */ (finding).verdict = item.verdict.trim().toLowerCase();
+    }
+    if (rationale) {
+        /** @type {any} */ (finding).rationale = rationale;
+    }
+    if (typeof item.suggested_fix === 'string') {
+        /** @type {any} */ (finding).suggested_fix = item.suggested_fix.trim();
+    }
+
     return finding;
 }
 

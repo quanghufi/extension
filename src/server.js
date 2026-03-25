@@ -233,7 +233,7 @@ export class HubServer {
     /**
      * Run a multi-agent debate on a completed session.
      * @param {string} sessionId
-     * @param {{ agents: string[], maxRounds?: number, decider?: string, consensusThreshold?: number }} config
+     * @param {{ agents: string[], maxRounds?: number, decider?: string, consensusThreshold?: number, seedFindings?: import('./schema/events.js').Finding[] }} config
      * @returns {Promise<{ logicalFindings: any[], finalFindings: any[], evaluations: any[] }>}
      */
     async runDebate(sessionId, config) {
@@ -265,6 +265,7 @@ export class HubServer {
                 agents: config.agents,
                 maxRounds: config.maxRounds ?? 3,
                 decider: config.decider ?? null,
+                seedFindingCount: config.seedFindings?.length ?? 0,
             });
             session.addEvent(startedEvent, { force: true });
             this.broadcast(sessionId, startedEvent);

@@ -37,6 +37,15 @@ describe('Built-in adapters', () => {
 
         assert.deepEqual(claude.timeouts, codex.timeouts);
     });
+
+    it('gives codex and claude-code a generous shared review timeout budget', () => {
+        const codex = getAdapter('codex');
+        const claude = getAdapter('claude-code');
+
+        assert.ok(codex.timeouts.idleMs >= 300000);
+        assert.ok(codex.timeouts.hardMs >= 600000);
+        assert.deepEqual(claude.timeouts, codex.timeouts);
+    });
 });
 
 // ── Registration ─────────────────────────────────────

@@ -6,6 +6,104 @@ import { Session } from './hub/session.js';
 import { getAdapter, registerAdapter } from './adapters/adapter-registry.js';
 
 describe('HubServer debate orchestration', () => {
+    it('runDebate can seed a single-round debate from existing Codex findings', async () => {
+        const server = new HubServer({
+            port: 0,
+            dataDir: `./tmp/test-debate-seeded-${Date.now()}`,
+            snapshotDir: `./tmp/test-debate-seeded-snap-${Date.now()}`,
+        });
+
+        const originalCodex = getAdapter('codex');
+        const originalClaude = getAdapter('claude-code');
+        const prompts = new Map();
+
+        const seedFinding = {
+            id: `F-SEEDED-${Date.now()}`,
+            severity: 'high',
+            summary: 'Unbounded request body read',
+            evidence: 'No size limit on incoming request body',
+            file: 'src/http-utils.js',
+            line: 42,
+            confidence: 0.92,
+            dedupe_key: 'seeded-unbounded-read',
+            fix_instructions: 'Add bounds checks before reading the request body.',
+            why_it_matters: 'Unbounded reads can exhaust memory under load.',
+        };
+
+        const makeAdapter = (agentId, findings) => ({
+            agentId,
+            buildCommand: () => ({ cmd: 'fake', args: [] }),
+            parseChunk: async function* () { },
+            parseResult: () => [],
+            execute: (_sessionId, _projectDir, prompt) => {
+                prompts.set(agentId, String(prompt));
+                return {
+                    stream: (async function* () { })(),
+                    done: Promise.resolve({
+                        status: 'ok',
+                        findings,
+                        timingMs: { firstByteMs: 0, lastIdleGapMs: 0, totalMs: 0 },
+                    }),
+                };
+            },
+        });
+
+        registerAdapter(makeAdapter('codex', [{
+            ...seedFinding,
+            rationale: 'Codex still reproduces the issue in the reviewed scope.',
+        }]), { replace: true });
+        registerAdapter(makeAdapter('claude-code', []), { replace: true });
+
+        try {
+            const session = new Session({
+                projectDir: '/debate-project',
+                prompt: 'Review only src/http-utils.js',
+                agentId: 'codex',
+                reviewOptions: {
+                    review_target: 'file',
+                    file_path: 'src/http-utils.js',
+                    max_findings: 10,
+                },
+            });
+            session.start();
+            session.finalize('completed', [seedFinding]);
+            server.store.save(session);
+
+            const result = await server.runDebate(session.id, {
+                agents: ['codex', 'claude-code'],
+                maxRounds: 1,
+                decider: 'codex',
+                seedFindings: [seedFinding],
+            });
+
+            const stored = server.store.load(session.id);
+            assert.ok(stored);
+            // Judge mode: Codex does NOT run review (auto-accepts), only Claude runs as judge
+            assert.equal(prompts.has('codex'), false, 'Codex should NOT receive a review prompt in judge mode');
+            assert.match(prompts.get('claude-code') ?? '', /Findings to judge \(from initial automated review\)/i);
+            assert.match(prompts.get('claude-code') ?? '', /independent code review JUDGE/i);
+            assert.doesNotMatch(prompts.get('claude-code') ?? '', /Codex/i, 'Judge prompt must be agent-blind — no agent names');
+            assert.match(prompts.get('claude-code') ?? '', /bias guardrails/i, 'Judge prompt must include bias guardrails');
+            assert.doesNotMatch(prompts.get('claude-code') ?? '', /Review the requested code scope directly\./i);
+            assert.equal(stored.debateState, 'resolved');
+            assert.equal(stored.debateRound, 1);
+            // Claude rejected the finding → allFindings should be empty (only confirmed survive)
+            assert.equal(stored.allFindings.length, 0, 'Rejected findings must NOT appear in allFindings');
+            assert.equal(stored.mergedFindings.length, 0, 'Rejected findings must NOT appear in mergedFindings');
+            assert.equal(result.finalFindings.length, 0, 'finalFindings should only contain confirmed findings');
+            // Judge verdicts should still contain the rejection with rationale
+            assert.ok(Array.isArray(stored.judgeVerdicts), 'judgeVerdicts should be an array');
+            assert.equal(stored.judgeVerdicts.length, 1);
+            assert.equal(stored.judgeVerdicts[0].dedupeKey, 'seeded-unbounded-read');
+            assert.equal(stored.judgeVerdicts[0].verdict, 'rejected');
+            assert.ok(stored.judgeVerdicts[0].rationale.length > 0, 'Rejected verdict must include rationale');
+            assert.equal(stored.judgeVerdicts[0].judgeAgent, 'claude-code');
+        } finally {
+            registerAdapter(originalCodex, { replace: true });
+            registerAdapter(originalClaude, { replace: true });
+        }
+    });
+
     it('runDebate resolves disputed findings after a rebuttal round', async () => {
         const server = new HubServer({
             port: 0,

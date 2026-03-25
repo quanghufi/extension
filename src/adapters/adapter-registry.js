@@ -36,8 +36,9 @@ const registry = new Map();
 
 const SHARED_REVIEW_TIMEOUTS = Object.freeze({
     firstByteMs: 90_000,
-    idleMs: 120_000,
-    hardMs: 360_000,
+    // LLM reviewers can go quiet for minutes while inspecting large files.
+    idleMs: 300_000,
+    hardMs: 600_000,
 });
 
 /**

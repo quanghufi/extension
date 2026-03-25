@@ -108,7 +108,7 @@ export function validateDebateRequest(session, { agents, decider, sessionId }) {
  *
  * @param {import('./server.js').HubServer} server
  * @param {string} sessionId
- * @param {{ agents: string[], maxRounds?: number, decider?: string, consensusThreshold?: number }} options
+ * @param {{ agents: string[], maxRounds?: number, decider?: string, consensusThreshold?: number, seedFindings?: import('./schema/events.js').Finding[] }} options
  */
 export function startDebateInBackground(server, sessionId, options) {
     server.runDebate(sessionId, {
@@ -116,6 +116,7 @@ export function startDebateInBackground(server, sessionId, options) {
         maxRounds: options.maxRounds ?? 3,
         decider: options.decider ?? undefined,
         consensusThreshold: options.consensusThreshold ?? 0.7,
+        seedFindings: options.seedFindings ?? undefined,
     }).catch((err) => {
         console.error(`[MCP] runDebate error for ${sessionId}:`, err);
     });

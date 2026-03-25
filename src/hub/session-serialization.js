@@ -47,6 +47,8 @@ export function serializeSession(session) {
         debateActive: session.debateActive,
         debateRoundEvals: session.debateRoundEvals,
         debateTimings: session.debateTimings,
+        // Judge layer
+        judgeVerdicts: session.judgeVerdicts,
     };
 }
 
@@ -109,4 +111,7 @@ export function hydrateSession(session, data) {
     session.debateActive = /** @type {boolean} */ (data.debateActive ?? false);
     session.debateRoundEvals = /** @type {Record<string, Record<string, any[]>>} */ (data.debateRoundEvals ?? {});
     session.debateTimings = /** @type {Array<any>} */ (data.debateTimings ?? []);
+
+    // Judge layer — safe defaults for old sessions
+    session.judgeVerdicts = /** @type {Array<any>|null} */ (data.judgeVerdicts ?? null);
 }

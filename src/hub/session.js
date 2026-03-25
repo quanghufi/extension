@@ -29,7 +29,9 @@ const TERMINAL_STATES = /** @type {const} */ ([
 const DEFAULT_STALL_THRESHOLD_MS = 15 * 60_000;
 const STALL_THRESHOLD_BY_AGENT = Object.freeze({
     'mcp-codex': 15 * 60_000,
-    codex: 5 * 60_000,
+    // Keep watchdog above the local Codex hard timeout so waitForCompletion()
+    // does not mark an in-flight review as stalled before the adapter finishes.
+    codex: 11 * 60_000,
 });
 
 export class Session {
@@ -92,6 +94,10 @@ export class Session {
         this.debateRoundEvals = {};
         /** @type {Array<{ agentId: string, phase: string, startedAt: number, completedAt: number|null, timedOut: boolean }>} */
         this.debateTimings = [];
+
+        // ── Judge Layer ────────────────────────────────
+        /** @type {Array<{ dedupeKey: string, verdict: 'confirmed'|'rejected', rationale: string, suggested_fix: string|null, judgeAgent: string }>|null} */
+        this.judgeVerdicts = null;
     }
 
     /**
