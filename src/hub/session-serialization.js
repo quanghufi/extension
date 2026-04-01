@@ -2,12 +2,23 @@
 
 import { AgentRegistry } from './agent-registry.js';
 import { defaultAssignments, createDefaultTurn } from './session-collab.js';
+import { groupFindings, mergeFindingsSmart, buildFindingAgentMap } from './finding-aggregation.js';
+
+// ── Event types to exclude from persisted session files ──
+// raw_output events are CLI stdout/stderr logs — large, only useful for
+// live debugging, and never consumed by session reload or MCP tools.
+const EXCLUDED_EVENT_TYPES = new Set(['raw_output']);
 
 /**
  * @param {import('./session.js').Session} session
  * @returns {Record<string, unknown>}
  */
 export function serializeSession(session) {
+    // Strip bulky debug-only events before persisting
+    const persistedEvents = session.events.filter(
+        (e) => !EXCLUDED_EVENT_TYPES.has(e.event_type),
+    );
+
     return {
         id: session.id,
         projectDir: session.projectDir,
@@ -19,11 +30,11 @@ export function serializeSession(session) {
         state: session.state,
         createdAt: session.createdAt,
         completedAt: session.completedAt,
-        events: session.events,
+        events: persistedEvents,
         agents: session.agents.toJSON(),
         allFindings: session.allFindings,
-        groupedFindings: session.groupedFindings,
-        mergedFindings: session.mergedFindings,
+        // groupedFindings and mergedFindings are derivable from allFindings —
+        // omit from persistence to save ~80% disk. Recomputed on load if needed.
         mergeStats: session.mergeStats,
         reviewOptions: session.reviewOptions,
         round: session.round,
@@ -63,8 +74,27 @@ export function hydrateSession(session, data) {
     session._seqCounter = /** @type {number} */ (data._seqCounter ?? 0);
     session.events = /** @type {import('../schema/events.js').Event[]} */ (data.events ?? []);
     session.allFindings = /** @type {import('../schema/events.js').Finding[]} */ (data.allFindings ?? []);
-    session.groupedFindings = /** @type {import('../schema/events.js').GroupedFinding[]} */ (data.groupedFindings ?? []);
-    session.mergedFindings = /** @type {import('./merge.js').MergedFinding[]} */ (data.mergedFindings ?? []);
+
+    // Recompute derivable fields from allFindings if missing from persisted data
+    if (data.groupedFindings) {
+        session.groupedFindings = /** @type {import('../schema/events.js').GroupedFinding[]} */ (data.groupedFindings);
+    } else if (session.allFindings.length > 0) {
+        const agentMap = buildFindingAgentMap(session.events, session.allFindings);
+        session.groupedFindings = groupFindings(session.allFindings, agentMap);
+    } else {
+        session.groupedFindings = [];
+    }
+
+    if (data.mergedFindings) {
+        session.mergedFindings = /** @type {import('./merge.js').MergedFinding[]} */ (data.mergedFindings);
+    } else if (session.allFindings.length > 0) {
+        const agentMap = buildFindingAgentMap(session.events, session.allFindings);
+        const mergeResult = mergeFindingsSmart(session.allFindings, agentMap);
+        session.mergedFindings = mergeResult.merged;
+        session.mergeStats = mergeResult.stats;
+    } else {
+        session.mergedFindings = [];
+    }
     session.mergeStats = /** @type {import('./merge.js').MergeStats} */ (data.mergeStats ?? {
         total: 0,
         merged: 0,
