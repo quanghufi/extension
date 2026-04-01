@@ -498,6 +498,8 @@ function buildMcpServer() {
             reviewTarget: z.string().optional().describe('Review target. Must be "file" when filePath is provided.'),
             filePath: z.string().optional().describe('Specific file to review. Required when reviewing a single file.'),
             maxFindings: z.number().optional().describe('Max findings to return from the review (default: 10)'),
+            judgeAgent: z.string().optional().describe('Agent ID for judge phase (default: claude-code)'),
+            disputedThreshold: z.string().optional().describe('Auto-reject disputed findings at or below this severity (default: "low")'),
         },
         async (args) => {
             const server = await hub.ensureReady(args.projectDir);
@@ -584,6 +586,8 @@ function buildMcpServer() {
                     maxRounds: fixedMaxRounds,
                     decider,
                     seedFindings: completed.allFindings,
+                    judgeAgent: args.judgeAgent,
+                    disputedThreshold: args.disputedThreshold,
                 });
 
                 hub.state = STATES.READY;
