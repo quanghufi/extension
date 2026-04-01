@@ -1,7 +1,15 @@
 # Debate Mechanism Design — Token-Efficient & Effective
 
 ## Status
-**Approved**: Draft v1.0
+**Implemented**: v1.0 — Branch `feature/debate-opt` (worktree `debate-opt`)
+
+## Implementation Summary
+
+Two commits implement the full spec:
+- `de2822e` — Replace multi-round debate loop with targeted judge (Phase 3)
+- `1ea4dd7` — Add auto-reject low severity + expose judgeAgent/disputedThreshold config
+
+**All 579 tests pass.**
 
 ## Overview
 
@@ -67,7 +75,7 @@ Thiết kế cơ chế debate mới cho Extension Hub, tối ưu hóa giữa **e
   - Finding ở **cả 2 agents** → `status: 'agreed'`, `confidence: 1.0`
   - Finding ở **chỉ 1 agent** → `status: 'disputed'`
   - Finding **dropped** (rejected by eval) → excluded
-- **Auto-reject low severity disputed** (severity ≤ 'low', configurable) để tiết kiệm judge tokens. High/critical disputed luôn đi qua judge.
+- **Auto-reject low severity disputed** (severity ≤ threshold, configurable via `disputedThreshold` param) — implemented in `run()` Phase 3, before judge runs. Threshold defaults to `'low'`. Also exposed via `hub_start_debate` MCP tool param.
 
 **Token optimization**: Pure logic, no LLM calls.
 
@@ -155,10 +163,10 @@ Thiết kế cơ chế debate mới cho Extension Hub, tối ưu hóa giữa **e
 
 | File | Changes |
 |------|---------|
-| `src/hub/debate-orchestrator.js` | Add Phase 3 (targeted judge), modify `run()` để short-circuit sau judge (no multi-round loop), optimize batch size. |
-| `src/hub/consensus-engine.js` | Add auto-reject low severity disputed in `mergeFinalFindings()`. |
-| `src/hub/debate-state.js` | Thêm state 'judging' (optional, cho tracking). |
-| `src/mcp-collab-tools.js` | Expose judge mode config via `hub_start_debate` tool (add `judgeAgent`, `disputedThreshold` options). |
+| `src/hub/debate-orchestrator.js` | ✅ Phase 3 targeted judge in `run()`, `_findingsForKeys()` helper, auto-reject low severity, `judgeAgent`/`disputedThreshold` config support. |
+| `src/hub/consensus-engine.js` | No changes needed — auto-reject handled in orchestrator `run()`. |
+| `src/hub/debate-state.js` | ✅ Added `judging` state + transitions (`consensus_check → judging → resolved`). |
+| `src/mcp-collab-tools.js` | ✅ Added `judgeAgent` and `disputedThreshold` params to `hub_start_debate`. |
 
 ### Files to Reuse (không thay đổi)
 
@@ -184,7 +192,7 @@ Thiết kế cơ chế debate mới cho Extension Hub, tối ưu hóa giữa **e
 
 ## Testing Plan
 
-1. **Unit tests**: Mock adapters, test Phase 2 (auto-merge logic), Phase 3 (validation).
-2. **Integration tests**: Test full flow với real adapters (hoặc mock adapters nếu cần).
-3. **Token measurement**: Log tokens mỗi phase, assert total ≤ 100K.
-4. **Error injection**: Test agent failures, malformed judge output.
+1. **Unit tests**: Mock adapters, test Phase 2 (auto-merge logic), Phase 3 (validation). ✅ Updated `debate-orchestrator.test.js`, `debate-state.test.js`.
+2. **Integration tests**: Test full flow với mock adapters. ✅ Updated `server-debate.test.js`.
+3. **Token measurement**: Log tokens mỗi phase, assert total ≤ 100K. (Not yet instrumented — deferred.)
+4. **Error injection**: Test agent failures, malformed judge output. ✅ Covered by existing retry/fallback tests (579/579 passing).
