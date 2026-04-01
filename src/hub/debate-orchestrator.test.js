@@ -472,15 +472,14 @@ describe('debate-orchestrator', () => {
                 assert.equal(session.debateState, 'idle');
             });
 
-            it('debate_round increments round counter', () => {
+            it('no_consensus transitions to judging (Phase 3 targeted judge)', () => {
                 const session = createMockSession();
                 session.debateState = 'consensus_check';
                 session.debateRound = 0;
                 const executor = new DebateExecutor({ session });
 
                 executor.transition('no_consensus');
-                assert.equal(session.debateState, 'debate_round');
-                assert.equal(session.debateRound, 1);
+                assert.equal(session.debateState, 'judging');
             });
 
             it('terminal state sets debateActive to false', () => {

@@ -443,8 +443,10 @@ export function registerCollabTools(mcpServer, hub) {
             maxRounds: z.number().optional().describe('Maximum debate rounds (default: 3)'),
             decider: z.string().optional().describe('Decider agent ID for tie-breaks (required if 2 agents)'),
             consensusThreshold: z.number().optional().describe('Agreement threshold 0.0-1.0 (default: 0.7)'),
+            judgeAgent: z.string().optional().describe('Agent ID to use as judge for disputed findings (default: claude-code)'),
+            disputedThreshold: z.string().optional().describe('Auto-reject disputed findings at or below this severity (default: "low"). Options: "low", "medium", "info"'),
         },
-        async ({ sessionId, agents, maxRounds, decider, consensusThreshold }) => {
+        async ({ sessionId, agents, maxRounds, decider, consensusThreshold, judgeAgent, disputedThreshold }) => {
             try {
                 const record = hub.getSessionRecord(sessionId);
                 if (!record) {
@@ -460,6 +462,8 @@ export function registerCollabTools(mcpServer, hub) {
                     maxRounds,
                     decider,
                     consensusThreshold,
+                    judgeAgent,
+                    disputedThreshold,
                 });
 
                 return {
@@ -474,6 +478,8 @@ export function registerCollabTools(mcpServer, hub) {
                             maxRounds: maxRounds ?? 3,
                             decider: decider ?? null,
                             consensusThreshold: consensusThreshold ?? 0.7,
+                            judgeAgent: judgeAgent ?? 'claude-code',
+                            disputedThreshold: disputedThreshold ?? 'low',
                             message: 'Debate started in background. Use hub_get_status to watch progress.',
                         }, null, 2),
                     }],

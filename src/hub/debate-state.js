@@ -16,6 +16,7 @@ export const DEBATE_STATES = /** @type {const} */ ([
     'reviewing',
     'cross_eval',
     'consensus_check',
+    'judging',
     'debate_round',
     'tie_break',
     'resolved',
@@ -35,7 +36,8 @@ const DEBATE_TRANSITIONS = Object.freeze({
     idle:             ['reviewing'],
     reviewing:        ['cross_eval', 'failed'],
     cross_eval:       ['consensus_check', 'failed'],
-    consensus_check:  ['resolved', 'debate_round', 'tie_break'],
+    consensus_check:  ['resolved', 'judging', 'debate_round', 'tie_break'],
+    judging:          ['resolved', 'failed'],
     debate_round:     ['cross_eval', 'failed'],
     tie_break:        ['resolved'],
     resolved:         [],
@@ -54,6 +56,8 @@ export const DEBATE_EVENTS = /** @type {const} */ ([
     'all_evals_done',    // cross_eval → consensus_check
     'consensus_reached', // consensus_check → resolved
     'no_consensus',      // consensus_check → debate_round
+    'start_judging',     // consensus_check → judging
+    'judging_done',      // judging → resolved
     'max_rounds',        // consensus_check → tie_break
     'rebuttals_done',    // debate_round → cross_eval
     'tie_broken',        // tie_break → resolved
@@ -81,8 +85,12 @@ const EVENT_MAP = Object.freeze({
     },
     consensus_check: {
         consensus_reached: 'resolved',
-        no_consensus: 'debate_round',
+        no_consensus: 'judging',
         max_rounds: 'tie_break',
+        error: 'failed',
+    },
+    judging: {
+        judging_done: 'resolved',
         error: 'failed',
     },
     debate_round: {

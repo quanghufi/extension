@@ -18,12 +18,12 @@ describe('debate-state', () => {
     // ── Constants ────────────────────────────────────
 
     describe('DEBATE_STATES', () => {
-        it('has 8 states', () => {
-            assert.equal(DEBATE_STATES.length, 8);
+        it('has 9 states', () => {
+            assert.equal(DEBATE_STATES.length, 9);
         });
 
         it('contains all expected states', () => {
-            const expected = ['idle', 'reviewing', 'cross_eval', 'consensus_check', 'debate_round', 'tie_break', 'resolved', 'failed'];
+            const expected = ['idle', 'reviewing', 'cross_eval', 'consensus_check', 'judging', 'debate_round', 'tie_break', 'resolved', 'failed'];
             assert.deepEqual([...DEBATE_STATES], expected);
         });
     });
@@ -35,8 +35,8 @@ describe('debate-state', () => {
     });
 
     describe('DEBATE_EVENTS', () => {
-        it('has 9 event types', () => {
-            assert.equal(DEBATE_EVENTS.length, 9);
+        it('has 11 event types', () => {
+            assert.equal(DEBATE_EVENTS.length, 11);
         });
     });
 
@@ -77,6 +77,18 @@ describe('debate-state', () => {
 
         it('tie_break → resolved is valid', () => {
             assert.equal(validateDebateTransition('tie_break', 'resolved'), true);
+        });
+
+        it('consensus_check → judging is valid', () => {
+            assert.equal(validateDebateTransition('consensus_check', 'judging'), true);
+        });
+
+        it('judging → resolved is valid', () => {
+            assert.equal(validateDebateTransition('judging', 'resolved'), true);
+        });
+
+        it('judging → failed is valid', () => {
+            assert.equal(validateDebateTransition('judging', 'failed'), true);
         });
 
         it('idle → resolved is INVALID (skip states)', () => {
@@ -165,14 +177,24 @@ describe('debate-state', () => {
             assert.deepEqual(result, { state: 'resolved', valid: true });
         });
 
-        it('consensus_check + no_consensus → debate_round', () => {
+        it('consensus_check + no_consensus → judging (Phase 3)', () => {
             const result = deriveNextDebateState('consensus_check', 'no_consensus');
-            assert.deepEqual(result, { state: 'debate_round', valid: true });
+            assert.deepEqual(result, { state: 'judging', valid: true });
         });
 
         it('consensus_check + max_rounds → tie_break', () => {
             const result = deriveNextDebateState('consensus_check', 'max_rounds');
             assert.deepEqual(result, { state: 'tie_break', valid: true });
+        });
+
+        it('consensus_check + no_consensus → judging', () => {
+            const result = deriveNextDebateState('consensus_check', 'no_consensus');
+            assert.deepEqual(result, { state: 'judging', valid: true });
+        });
+
+        it('judging + judging_done → resolved', () => {
+            const result = deriveNextDebateState('judging', 'judging_done');
+            assert.deepEqual(result, { state: 'resolved', valid: true });
         });
 
         it('debate_round + rebuttals_done → cross_eval (loop)', () => {
@@ -186,7 +208,7 @@ describe('debate-state', () => {
         });
 
         it('any non-terminal + error → failed', () => {
-            const nonTerminal = ['idle', 'reviewing', 'cross_eval', 'consensus_check', 'debate_round', 'tie_break'];
+            const nonTerminal = ['idle', 'reviewing', 'cross_eval', 'consensus_check', 'judging', 'debate_round', 'tie_break'];
             for (const state of nonTerminal) {
                 const result = deriveNextDebateState(state, 'error');
                 assert.deepEqual(result, { state: 'failed', valid: true }, `${state} + error should → failed`);

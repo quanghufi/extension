@@ -1198,6 +1198,26 @@ export class DebateExecutor {
         });
     }
 
+
+    /**
+     * Look up raw Finding objects by dedupeKey from rawFindingsByAgent.
+     * @param {string[]} keys
+     * @returns {import('../schema/events.js').Finding[]}
+     */
+    _findingsForKeys(keys) {
+        const keySet = new Set(keys);
+        const result = [];
+        for (const findings of this.rawFindingsByAgent.values()) {
+            for (const f of findings) {
+                if (keySet.has(f.dedupe_key) && !result.some(r => r.dedupe_key === f.dedupe_key)) {
+                    result.push(f);
+                }
+            }
+        }
+        return result;
+    }
+
+
     async resolveFinalFindings() {
         const engine = new ConsensusEngine({ threshold: this.reducer.consensusThreshold });
         const tieBreakEvaluations = this.session.debateState === 'tie_break'
@@ -1225,26 +1245,26 @@ export class DebateExecutor {
     }
 
     /**
-     * @param {{ agents: string[], maxRounds?: number, decider?: string, consensusThreshold?: number, seedFindings?: import('../schema/events.js').Finding[] }} config
+     * @param {{ agents: string[], maxRounds?: number, decider?: string, consensusThreshold?: number, seedFindings?: import('../schema/events.js').Finding[], disputedThreshold?: string, judgeAgent?: string }} config
      */
     async run(config) {
         try {
             this.initDebate(config);
             this.transition('start');
 
+            // Phase 1: Parallel review (both agents or seeded)
             if ((config.seedFindings?.length ?? 0) > 0) {
                 this.session.debateRound = 1;
-                this.onSystemMessage(`Judge mode: Claude Code will evaluate ${config.seedFindings.length} Codex finding(s).`);
+                this.onSystemMessage('Judge mode: Claude Code will evaluate ' + config.seedFindings.length + ' Codex finding(s).');
                 this.onCheckpoint();
 
-                // 1. Codex auto-accepts all (original reviewer — no need to re-run)
                 const codexAgent = config.agents.find(a => a === 'codex') ?? config.agents[0];
                 this.rawFindingsByAgent.set(codexAgent, config.seedFindings);
                 this.completedReviews = [codexAgent];
-                this.onSystemMessage(`${codexAgent} auto-accepted all ${config.seedFindings.length} seed finding(s) (original reviewer).`);
+                this.onSystemMessage(codexAgent + ' auto-accepted all ' + config.seedFindings.length + ' seed finding(s) (original reviewer).');
 
-                // 2. Only challenger (claude-code) runs as independent judge
-                const judgeAgents = config.agents.filter(a => a !== codexAgent);
+                const judgeAgent = config.judgeAgent ?? config.agents.find(a => a !== codexAgent);
+                const judgeAgents = judgeAgent ? [judgeAgent] : config.agents.filter(a => a !== codexAgent);
                 await this.runReviewPass(judgeAgents, {
                     phase: 'review',
                     prompt: buildJudgePrompt(config.seedFindings ?? [], this.session),
@@ -1259,13 +1279,12 @@ export class DebateExecutor {
 
             this.transition('all_reviews_done');
 
-            // ── Judge mode (seeded): skip the debate loop entirely ──
-            if ((config.seedFindings?.length ?? 0) > 0) {
-                // Cross-eval: infer evaluations from what each agent kept/dropped
-                this.inferEvaluations();
-                this.transition('all_evals_done');
+            // Phase 2: Auto-merge + infer evaluations (pure logic, 0 tokens)
+            this.inferEvaluations();
+            this.transition('all_evals_done');
 
-                // Build judge verdicts, then resolve using only confirmed findings
+            // Seeded judge mode: resolve directly
+            if ((config.seedFindings?.length ?? 0) > 0) {
                 this.session.judgeVerdicts = this.buildJudgeVerdicts(config.seedFindings);
                 const confirmedKeys = new Set(
                     this.session.judgeVerdicts
@@ -1277,9 +1296,9 @@ export class DebateExecutor {
                 const confirmedCount = confirmedKeys.size;
                 const rejectedCount = this.session.judgeVerdicts.length - confirmedCount;
                 this.onSystemMessage(
-                    `Judge mode resolved: ${confirmedCount} confirmed, ${rejectedCount} rejected. ` +
-                    `${confirmedCount} finding(s) kept, ${rejectedCount} finding(s) excluded. ` +
-                    `Full verdicts with rationale available in judgeVerdicts.`
+                    'Judge mode resolved: ' + confirmedCount + ' confirmed, ' + rejectedCount + ' rejected. ' +
+                    confirmedCount + ' finding(s) kept, ' + rejectedCount + ' finding(s) excluded. ' +
+                    'Full verdicts with rationale available in judgeVerdicts.'
                 );
                 this.transition('consensus_reached');
                 return {
@@ -1289,77 +1308,79 @@ export class DebateExecutor {
                 };
             }
 
-            while (!isDebateTerminal(this.session.debateState ?? 'failed')) {
-                const action = this.reducer.getNextAction({
-                    debateState: this.session.debateState ?? 'failed',
-                    debateRound: this.session.debateRound ?? 0,
-                    agents: this.session.debateAgents ?? [],
-                    findings: this.findings,
-                    evaluations: this.evaluations,
-                    completedReviews: this.completedReviews,
-                    completedEvals: this.completedEvals,
-                });
+            // Phase 3: Targeted judge for disputed findings only
+            const agreement = this.reducer.consensus.calculateAgreement(this.findings, this.evaluations);
+            this.lastAgreement = agreement;
 
-                switch (action.type) {
-                    case 'START_CROSS_EVAL':
-                        this.inferEvaluations();
-                        this.transition('all_evals_done');
-                        break;
+            // Auto-reject low severity disputed (configurable threshold, default: 'low')
+            const disputedThreshold = config.disputedThreshold ?? 'low';
+            const SEVERITY_RANK = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
+            const thresholdRank = SEVERITY_RANK[disputedThreshold] ?? 1;
+            const judgeable = agreement.disputed.filter(f => (SEVERITY_RANK[f.severity] ?? 0) > thresholdRank);
+            const autoRejected = agreement.disputed.filter(f => (SEVERITY_RANK[f.severity] ?? 0) <= thresholdRank);
 
-                    case 'CHECK_CONSENSUS': {
-                        const agreement = this.reducer.consensus.calculateAgreement(this.findings, this.evaluations);
-                        this.lastAgreement = agreement;
-                        this.disputedFindings = agreement.disputed;
-
-                        if (this.reducer.consensus.hasConsensus(agreement.ratio, this.session.debateRound ?? 0)) {
-                            const resolution = await this.resolveFinalFindings();
-                            this.transition('consensus_reached');
-                            return resolution;
-                        }
-                        if ((this.session.debateRound ?? 0) >= (this.session.debateMaxRounds ?? 3)) {
-                            this.transition('max_rounds');
-                            break;
-                        }
-                        this.transition('no_consensus');
-                        await this.runRebuttal(agreement.disputed);
-                        this.transition('rebuttals_done');
-                        break;
-                    }
-
-                    case 'RESOLVE': {
-                        const resolution = await this.resolveFinalFindings();
-                        if (this.session.debateState === 'tie_break') {
-                            this.transition('tie_broken');
-                        } else if (this.session.debateState === 'consensus_check') {
-                            this.transition('consensus_reached');
-                        }
-                        return resolution;
-                    }
-
-                    case 'TIE_BREAK':
-                        this.transition('max_rounds');
-                        break;
-
-                    case 'START_REBUTTAL':
-                        this.transition('no_consensus');
-                        await this.runRebuttal(/** @type {FindingEntry[]} */ (action.payload.disputed ?? []));
-                        this.transition('rebuttals_done');
-                        break;
-
-                    case 'FAIL':
-                        this.transition('error');
-                        throw new Error(String(action.payload.reason ?? 'Debate failed'));
-
-                    case 'START_REVIEW':
-                        throw new Error(`Unexpected action ${action.type} in executor loop`);
-
-                    default:
-                        throw new Error(`Unhandled action ${action.type}`);
+            if (autoRejected.length > 0) {
+                this.onSystemMessage(autoRejected.length + ' low-severity disputed finding(s) auto-rejected (below threshold: ' + disputedThreshold + ').');
+                for (const f of autoRejected) {
+                    this.evaluations = this.evaluations.filter(e => e.dedupeKey !== f.dedupeKey);
+                    this.evaluations.push({
+                        dedupeKey: f.dedupeKey,
+                        verdict: 'rejected',
+                        agentId: 'auto',
+                        round: this.session.debateRound ?? 0,
+                        rationale: 'Auto-rejected: severity "' + f.severity + '" below dispute threshold "' + disputedThreshold + '".',
+                    });
                 }
             }
 
-            throw new Error(`Debate terminated unexpectedly in state "${this.session.debateState}"`);
-        } finally {
+            this.disputedFindings = judgeable;
+
+            if (judgeable.length > 0) {
+                this.onSystemMessage(judgeable.length + ' disputed finding(s) detected. Running targeted judge...');
+                this.transition('no_consensus');
+
+                const scope = getReviewScope(this.session);
+                const batches = splitDisputedIntoBatches(agreement.disputed, { fileReview: scope.isFileReview });
+                const judgeAgent = config.judgeAgent ?? config.agents.find(a => a === 'claude-code') ?? config.agents[config.agents.length - 1];
+
+                for (const [index, batch] of batches.entries()) {
+                    const batchLabel = batches.length > 1
+                        ? '\n\nJudge batch ' + (index + 1) + ' of ' + batches.length + '.'
+                        : '';
+                    const disputedKeys = new Set(batch.map(f => f.dedupeKey));
+                    const batchFindings = this._findingsForKeys([...disputedKeys]);
+                    await this.runReviewPass([judgeAgent], {
+                        phase: 'review',
+                        prompt: buildJudgePrompt(batchFindings, this.session) + batchLabel,
+                        seedFindings: batchFindings,
+                    });
+                }
+
+                const allDisputedKeys = [...new Set(judgeable.map(f => f.dedupeKey))];
+                const allDisputedFindings = this._findingsForKeys(allDisputedKeys);
+                this.session.judgeVerdicts = this.buildJudgeVerdicts(allDisputedFindings);
+
+                for (const verdict of this.session.judgeVerdicts) {
+                    this.evaluations = this.evaluations.filter(e => e.dedupeKey !== verdict.dedupeKey);
+                    this.evaluations.push({
+                        dedupeKey: verdict.dedupeKey,
+                        verdict: verdict.verdict === 'confirmed' ? 'accepted' : 'rejected',
+                        agentId: judgeAgent,
+                        round: this.session.debateRound ?? 0,
+                        rationale: verdict.rationale,
+                    });
+                }
+
+                this.transition('judging_done');
+            } else {
+                this.onSystemMessage('All findings agreed. Skipping judge phase.');
+                this.transition('consensus_reached');
+            }
+
+            // Phase 4: Resolve and notify
+            const resolution = await this.resolveFinalFindings();
+            return resolution;
+} finally {
             this.cleanupFileScopedWorkspace();
         }
     }
