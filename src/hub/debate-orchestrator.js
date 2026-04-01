@@ -1245,7 +1245,7 @@ export class DebateExecutor {
     }
 
     /**
-     * @param {{ agents: string[], maxRounds?: number, decider?: string, consensusThreshold?: number, seedFindings?: import('../schema/events.js').Finding[] }} config
+     * @param {{ agents: string[], maxRounds?: number, decider?: string, consensusThreshold?: number, seedFindings?: import('../schema/events.js').Finding[], disputedThreshold?: string, judgeAgent?: string }} config
      */
     async run(config) {
         try {
@@ -1263,7 +1263,8 @@ export class DebateExecutor {
                 this.completedReviews = [codexAgent];
                 this.onSystemMessage(codexAgent + ' auto-accepted all ' + config.seedFindings.length + ' seed finding(s) (original reviewer).');
 
-                const judgeAgents = config.agents.filter(a => a !== codexAgent);
+                const judgeAgent = config.judgeAgent ?? config.agents.find(a => a !== codexAgent);
+                const judgeAgents = judgeAgent ? [judgeAgent] : config.agents.filter(a => a !== codexAgent);
                 await this.runReviewPass(judgeAgents, {
                     phase: 'review',
                     prompt: buildJudgePrompt(config.seedFindings ?? [], this.session),
@@ -1310,15 +1311,37 @@ export class DebateExecutor {
             // Phase 3: Targeted judge for disputed findings only
             const agreement = this.reducer.consensus.calculateAgreement(this.findings, this.evaluations);
             this.lastAgreement = agreement;
-            this.disputedFindings = agreement.disputed;
 
-            if (agreement.disputed.length > 0) {
-                this.onSystemMessage(agreement.disputed.length + ' disputed finding(s) detected. Running targeted judge...');
+            // Auto-reject low severity disputed (configurable threshold, default: 'low')
+            const disputedThreshold = config.disputedThreshold ?? 'low';
+            const SEVERITY_RANK = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
+            const thresholdRank = SEVERITY_RANK[disputedThreshold] ?? 1;
+            const judgeable = agreement.disputed.filter(f => (SEVERITY_RANK[f.severity] ?? 0) > thresholdRank);
+            const autoRejected = agreement.disputed.filter(f => (SEVERITY_RANK[f.severity] ?? 0) <= thresholdRank);
+
+            if (autoRejected.length > 0) {
+                this.onSystemMessage(autoRejected.length + ' low-severity disputed finding(s) auto-rejected (below threshold: ' + disputedThreshold + ').');
+                for (const f of autoRejected) {
+                    this.evaluations = this.evaluations.filter(e => e.dedupeKey !== f.dedupeKey);
+                    this.evaluations.push({
+                        dedupeKey: f.dedupeKey,
+                        verdict: 'rejected',
+                        agentId: 'auto',
+                        round: this.session.debateRound ?? 0,
+                        rationale: 'Auto-rejected: severity "' + f.severity + '" below dispute threshold "' + disputedThreshold + '".',
+                    });
+                }
+            }
+
+            this.disputedFindings = judgeable;
+
+            if (judgeable.length > 0) {
+                this.onSystemMessage(judgeable.length + ' disputed finding(s) detected. Running targeted judge...');
                 this.transition('no_consensus');
 
                 const scope = getReviewScope(this.session);
                 const batches = splitDisputedIntoBatches(agreement.disputed, { fileReview: scope.isFileReview });
-                const judgeAgent = config.agents.find(a => a === 'claude-code') ?? config.agents[config.agents.length - 1];
+                const judgeAgent = config.judgeAgent ?? config.agents.find(a => a === 'claude-code') ?? config.agents[config.agents.length - 1];
 
                 for (const [index, batch] of batches.entries()) {
                     const batchLabel = batches.length > 1
@@ -1333,7 +1356,7 @@ export class DebateExecutor {
                     });
                 }
 
-                const allDisputedKeys = [...new Set(agreement.disputed.map(f => f.dedupeKey))];
+                const allDisputedKeys = [...new Set(judgeable.map(f => f.dedupeKey))];
                 const allDisputedFindings = this._findingsForKeys(allDisputedKeys);
                 this.session.judgeVerdicts = this.buildJudgeVerdicts(allDisputedFindings);
 
