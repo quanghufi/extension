@@ -571,7 +571,7 @@ export class DebateReducer {
      * @param {{ maxRounds?: number, consensusThreshold?: number }} [options]
      */
     constructor(options = {}) {
-        this.maxRounds = options.maxRounds ?? 3;
+        this.maxRounds = options.maxRounds ?? 1;
         this.consensusThreshold = options.consensusThreshold ?? 0.7;
         this.consensus = new ConsensusEngine({ threshold: this.consensusThreshold });
     }
@@ -722,7 +722,7 @@ export class DebateExecutor {
      * @returns {{ debateState: string, round: number, agents: string[], maxRounds: number }}
      */
     initDebate(config) {
-        const { agents, maxRounds = 3, decider, consensusThreshold = 0.7, promptMode = 'normal', reviewGate = { enabled: false } } = config;
+        const { agents, maxRounds = 1, decider, consensusThreshold = 0.7, promptMode = 'normal', reviewGate = { enabled: false } } = config;
 
         if (!agents || agents.length === 0 || agents.length > 2) {
             throw new Error(`Debate requires 1-2 agents, got ${agents?.length ?? 0}`);

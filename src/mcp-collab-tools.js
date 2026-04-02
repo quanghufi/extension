@@ -113,7 +113,7 @@ export function validateDebateRequest(session, { agents, decider, sessionId }) {
 export function startDebateInBackground(server, sessionId, options) {
     server.runDebate(sessionId, {
         agents: options.agents,
-        maxRounds: options.maxRounds ?? 3,
+        maxRounds: options.maxRounds ?? 1,
         decider: options.decider ?? undefined,
         consensusThreshold: options.consensusThreshold ?? 0.7,
         seedFindings: options.seedFindings ?? undefined,
@@ -487,7 +487,7 @@ export function registerCollabTools(mcpServer, hub) {
                             debateRound: session.debateRound,
                             debateActive: true,
                             agents,
-                            maxRounds: maxRounds ?? 3,
+                            maxRounds: maxRounds ?? 1,
                             decider: decider ?? null,
                             consensusThreshold: consensusThreshold ?? 0.7,
                             judgeAgent: judgeAgent ?? 'claude-code',

@@ -500,6 +500,14 @@ function buildMcpServer() {
             maxFindings: z.number().optional().describe('Max findings to return from the review (default: 10)'),
             judgeAgent: z.string().optional().describe('Agent ID for judge phase (default: claude-code)'),
             disputedThreshold: z.string().optional().describe('Auto-reject disputed findings at or below this severity (default: "low")'),
+            promptMode: z.enum(['normal', 'adversarial', 'escalating']).optional().default('normal'),
+            reviewGate: z.object({
+                enabled: z.boolean().optional().default(false),
+                judge: z.string().optional().default('claude-code'),
+                blockOnRegression: z.boolean().optional().default(true),
+                maxSeverityToSkip: z.enum(['info', 'low', 'medium', 'high', 'critical']).optional().default('info'),
+                confirmThreshold: z.number().min(0).max(1).optional().default(0.7),
+            }).optional(),
         },
         async (args) => {
             const server = await hub.ensureReady(args.projectDir);
@@ -508,103 +516,65 @@ function buildMcpServer() {
             try {
                 const debateAgents = ['codex', 'claude-code'];
                 const decider = 'codex';
-                const reviewAgent = 'codex';
                 const fixedMaxRounds = 1;
+
                 const invalidReviewArgs = validateReviewScopeArgs(args);
                 if (invalidReviewArgs) {
                     hub.state = STATES.READY;
                     return createMcpError(invalidReviewArgs);
                 }
-                const preflightSession = new Session({
-                    projectDir: args.projectDir,
-                    prompt: normalizeReviewPrompt({
-                        prompt: args.prompt,
-                        reviewTarget: args.reviewTarget ?? 'uncommitted',
-                        filePath: args.filePath,
-                    }),
-                    agentId: reviewAgent,
+
+                // Create session and mark completed immediately (no initial review)
+                const session = createReviewSession(server, {
+                    ...args,
+                    agentId: 'codex',
                 });
-                preflightSession.state = 'completed';
-                const invalid = validateDebateRequest(preflightSession, {
+                hub.trackSession(session.id, session.projectDir);
+                session.start();
+                session.finalize('completed', []);
+                server.store.save(session);
+
+                // Validate debate request
+                const invalid = validateDebateRequest(session, {
                     agents: debateAgents,
                     decider,
-                    sessionId: '<new-session>',
+                    sessionId: session.id,
                 });
                 if (invalid) {
                     hub.state = STATES.READY;
                     return invalid;
                 }
 
-                const session = createReviewSession(server, {
-                    ...args,
-                    agentId: reviewAgent,
-                });
-                hub.trackSession(session.id, session.projectDir);
-                server.runSession(session.id).catch((err) => {
-                    console.error(`[MCP] runSession error for ${session.id}:`, err);
-                });
+                const storage = requirePersistedSession(server, session.id);
 
-                const completed = await hub.waitForCompletion(session.id);
-                const completedSession = server.activeSessions.get(completed.id) ?? server.store.load(completed.id);
-                if (!completedSession) {
-                    hub.state = STATES.READY;
-                    return createMcpError(`Session ${completed.id} disappeared before debate could start`);
-                }
-                const storage = requirePersistedSession(server, completed.id);
-
-                const invalidAfterReview = validateDebateRequest(completedSession, {
-                    agents: debateAgents,
-                    decider,
-                    sessionId: completed.id,
-                });
-                if (invalidAfterReview) {
-                    hub.state = STATES.READY;
-                    return invalidAfterReview;
-                }
-
-                if (completed.allFindings.length === 0) {
-                    hub.state = STATES.READY;
-                    return createMcpResult(JSON.stringify({
-                        sessionId: completed.id,
-                        reviewAgent,
-                        reviewState: completed.state,
-                        findingCount: 0,
-                        debateState: 'skipped',
-                        debateRound: 0,
-                        debateActive: false,
-                        debateMode: 'codex_findings_only',
-                        agents: debateAgents,
-                        storage,
-                        maxRounds: fixedMaxRounds,
-                        decider,
-                        message: 'Codex review completed with 0 findings — Claude Code judge evaluation skipped.',
-                    }, null, 2));
-                }
-
-                startDebateInBackground(server, completed.id, {
+                // Start debate directly — both agents do parallel review
+                startDebateInBackground(server, session.id, {
                     agents: debateAgents,
                     maxRounds: fixedMaxRounds,
                     decider,
-                    seedFindings: completed.allFindings,
+                    // NO seedFindings — both agents review from scratch
                     judgeAgent: args.judgeAgent,
                     disputedThreshold: args.disputedThreshold,
+                    promptMode: args.promptMode,
+                    reviewGate: args.reviewGate,
                 });
 
                 hub.state = STATES.READY;
                 return createMcpResult(JSON.stringify({
-                    sessionId: completed.id,
-                    reviewAgent,
-                    reviewState: completed.state,
-                    findingCount: completed.allFindings.length,
+                    sessionId: session.id,
+                    reviewState: 'skipped',
+                    findingCount: 0,
                     debateState: 'starting',
-                    debateRound: completedSession.debateRound,
+                    debateRound: 0,
                     debateActive: true,
-                    debateMode: 'codex_findings_only',
+                    debateMode: 'parallel_review',
                     agents: debateAgents,
                     storage,
                     maxRounds: fixedMaxRounds,
                     decider,
-                    message: 'Codex review completed. Claude Code judge evaluation started — will annotate each finding with verdict, rationale, and suggested fix.',
+                    promptMode: args.promptMode ?? 'normal',
+                    reviewGate: args.reviewGate ?? null,
+                    message: 'Parallel debate started — both agents review simultaneously. No initial review step. Use hub_get_status to watch progress.',
                 }, null, 2));
             } catch (err) {
                 hub.state = STATES.READY;

@@ -180,7 +180,7 @@ export function createDefaultDebateFields() {
     return {
         debateState: null,
         debateRound: 0,
-        debateMaxRounds: 3,
+        debateMaxRounds: 1,
         debateAgents: null,
         debateActive: false,
         debateRoundEvals: {},
