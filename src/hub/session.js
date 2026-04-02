@@ -95,6 +95,12 @@ export class Session {
         /** @type {Array<{ agentId: string, phase: string, startedAt: number, completedAt: number|null, timedOut: boolean }>} */
         this.debateTimings = [];
 
+        // ── Gate Layer ────────────────────────────────
+        /** @type {string|null} */
+        this.gateState = null;
+        /** @type {import('./review-gate.js').GateResult|null} */
+        this.gateResult = null;
+
         // ── Judge Layer ────────────────────────────────
         /** @type {Array<{ dedupeKey: string, verdict: 'confirmed'|'rejected', rationale: string, suggested_fix: string|null, judgeAgent: string }>|null} */
         this.judgeVerdicts = null;

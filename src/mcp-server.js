@@ -645,6 +645,8 @@ function buildMcpServer() {
                         debateRound: session.debateRound,
                         debateAgents: session.debateAgents,
                         debateActive: session.debateActive,
+                        gateState: session.gateState ?? null,
+                        gateResult: session.gateResult ?? null,
                     }, null, 2),
                 }],
             };

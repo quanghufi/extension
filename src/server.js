@@ -233,7 +233,7 @@ export class HubServer {
     /**
      * Run a multi-agent debate on a completed session.
      * @param {string} sessionId
-     * @param {{ agents: string[], maxRounds?: number, decider?: string, consensusThreshold?: number, seedFindings?: import('./schema/events.js').Finding[] }} config
+     * @param {{ agents: string[], maxRounds?: number, decider?: string, consensusThreshold?: number, seedFindings?: import('./schema/events.js').Finding[], reviewGate?: import('./hub/review-gate.js').GateConfig, promptMode?: 'normal'|'adversarial'|'escalating' }} config
      * @returns {Promise<{ logicalFindings: any[], finalFindings: any[], evaluations: any[] }>}
      */
     async runDebate(sessionId, config) {

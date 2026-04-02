@@ -108,7 +108,7 @@ export function validateDebateRequest(session, { agents, decider, sessionId }) {
  *
  * @param {import('./server.js').HubServer} server
  * @param {string} sessionId
- * @param {{ agents: string[], maxRounds?: number, decider?: string, consensusThreshold?: number, seedFindings?: import('./schema/events.js').Finding[] }} options
+ * @param {{ agents: string[], maxRounds?: number, decider?: string, consensusThreshold?: number, seedFindings?: import('./schema/events.js').Finding[], reviewGate?: import('./hub/review-gate.js').GateConfig, promptMode?: 'normal'|'adversarial'|'escalating' }} options
  */
 export function startDebateInBackground(server, sessionId, options) {
     server.runDebate(sessionId, {
@@ -117,6 +117,8 @@ export function startDebateInBackground(server, sessionId, options) {
         decider: options.decider ?? undefined,
         consensusThreshold: options.consensusThreshold ?? 0.7,
         seedFindings: options.seedFindings ?? undefined,
+        reviewGate: options.reviewGate ?? undefined,
+        promptMode: options.promptMode ?? undefined,
     }).catch((err) => {
         console.error(`[MCP] runDebate error for ${sessionId}:`, err);
     });
@@ -445,8 +447,16 @@ export function registerCollabTools(mcpServer, hub) {
             consensusThreshold: z.number().optional().describe('Agreement threshold 0.0-1.0 (default: 0.7)'),
             judgeAgent: z.string().optional().describe('Agent ID to use as judge for disputed findings (default: claude-code)'),
             disputedThreshold: z.string().optional().describe('Auto-reject disputed findings at or below this severity (default: "low"). Options: "low", "medium", "info"'),
+            reviewGate: z.object({
+                enabled: z.boolean().optional().default(false),
+                judge: z.string().optional().default('claude-code'),
+                blockOnRegression: z.boolean().optional().default(true),
+                maxSeverityToSkip: z.enum(['info', 'low', 'medium', 'high', 'critical']).optional().default('info'),
+                confirmThreshold: z.number().min(0).max(1).optional().default(0.7),
+            }).optional(),
+            promptMode: z.enum(['normal', 'adversarial', 'escalating']).optional().default('normal'),
         },
-        async ({ sessionId, agents, maxRounds, decider, consensusThreshold, judgeAgent, disputedThreshold }) => {
+        async ({ sessionId, agents, maxRounds, decider, consensusThreshold, judgeAgent, disputedThreshold, reviewGate, promptMode }) => {
             try {
                 const record = hub.getSessionRecord(sessionId);
                 if (!record) {
@@ -464,6 +474,8 @@ export function registerCollabTools(mcpServer, hub) {
                     consensusThreshold,
                     judgeAgent,
                     disputedThreshold,
+                    reviewGate,
+                    promptMode,
                 });
 
                 return {
@@ -480,6 +492,8 @@ export function registerCollabTools(mcpServer, hub) {
                             consensusThreshold: consensusThreshold ?? 0.7,
                             judgeAgent: judgeAgent ?? 'claude-code',
                             disputedThreshold: disputedThreshold ?? 'low',
+                            promptMode: promptMode ?? 'normal',
+                            reviewGate: reviewGate ?? null,
                             message: 'Debate started in background. Use hub_get_status to watch progress.',
                         }, null, 2),
                     }],

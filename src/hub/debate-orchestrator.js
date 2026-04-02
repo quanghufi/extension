@@ -21,6 +21,7 @@ import {
 } from './debate-state.js';
 import { ConsensusEngine } from './consensus-engine.js';
 import { DEBATE_PROMPT_MARKER } from '../adapters/claude-code-parsing.js';
+import { buildGatePrompt, buildGateResult } from './review-gate.js';
 
 // ── Per-Agent Timeout Profiles ───────────────────────
 
@@ -670,6 +671,7 @@ export class DebateExecutor {
      *   onEvent?: (event: import('../schema/events.js').Event) => void,
      *   onCheckpoint?: () => void,
      *   promptMode?: 'normal' | 'adversarial' | 'escalating',
+     *   reviewGate?: import('./review-gate.js').GateConfig,
      * }} options
      */
     constructor(options) {
@@ -680,6 +682,7 @@ export class DebateExecutor {
         this.onEvent = options.onEvent ?? (() => {});
         this.onCheckpoint = options.onCheckpoint ?? (() => {});
         this.promptMode = options.promptMode ?? 'normal';
+        this.reviewGate = options.reviewGate ?? { enabled: false };
         this.reducer = new DebateReducer({
             maxRounds: this.session.debateMaxRounds ?? 3,
         });
@@ -715,11 +718,11 @@ export class DebateExecutor {
     }
 
     /**
-     * @param {{ agents: string[], maxRounds?: number, decider?: string, consensusThreshold?: number, promptMode?: 'normal' | 'adversarial' | 'escalating' }} config
+     * @param {{ agents: string[], maxRounds?: number, decider?: string, consensusThreshold?: number, promptMode?: 'normal' | 'adversarial' | 'escalating', reviewGate?: import('./review-gate.js').GateConfig }} config
      * @returns {{ debateState: string, round: number, agents: string[], maxRounds: number }}
      */
     initDebate(config) {
-        const { agents, maxRounds = 3, decider, consensusThreshold = 0.7, promptMode = 'normal' } = config;
+        const { agents, maxRounds = 3, decider, consensusThreshold = 0.7, promptMode = 'normal', reviewGate = { enabled: false } } = config;
 
         if (!agents || agents.length === 0 || agents.length > 2) {
             throw new Error(`Debate requires 1-2 agents, got ${agents?.length ?? 0}`);
@@ -752,6 +755,7 @@ export class DebateExecutor {
         });
 
         this.promptMode = promptMode;
+        this.reviewGate = reviewGate;
 
         this.onSystemMessage(`Debate initialized: agents=[${agents.join(', ')}], maxRounds=${maxRounds}, decider=${decider ?? 'N/A'}`);
         this.onCheckpoint();
@@ -1310,7 +1314,75 @@ export class DebateExecutor {
     }
 
     /**
-     * @param {{ agents: string[], maxRounds?: number, decider?: string, consensusThreshold?: number, seedFindings?: import('../schema/events.js').Finding[], disputedThreshold?: string, judgeAgent?: string, promptMode?: 'normal' | 'adversarial' | 'escalating' }} config
+     * Run a single judge agent for the review gate and return structured verdicts.
+     * @param {string} judgeId
+     * @param {string} prompt
+     * @param {FindingEntry[]} findings
+     * @returns {Promise<{ verdicts: Array<{ dedupeKey: string, status: string, rationale: string, regression: string|null }> }>}
+     */
+    async runGateJudgeAgent(judgeId, prompt, findings) {
+        const adapter = this.resolveAdapter(judgeId);
+        if (!adapter) {
+            throw new Error(`No adapter for judge: ${judgeId}`);
+        }
+
+        const executionPath = this.resolveExecutionPath(judgeId);
+        const startedAt = Date.now();
+
+        const { stream, done } = adapter.execute(
+            this.session.id,
+            executionPath,
+            prompt,
+            { timeouts: this.getPhaseTimeouts(judgeId, 'review') },
+        );
+
+        let rawOutput = '';
+        for await (const event of stream) {
+            if (event.event_type === 'raw_output' || event.event_type === 'stdout' || event.event_type === 'stderr') {
+                rawOutput += event.payload?.content ?? '';
+            }
+            this.onEvent(event);
+        }
+
+        const result = await done;
+        const completedAt = Date.now();
+        this.recordTiming(judgeId, 'review_gate', startedAt, completedAt, result.status === 'timeout');
+
+        const verdicts = this.parseGateJudgeVerdicts(rawOutput, findings);
+        return { verdicts };
+    }
+
+    /**
+     * Parse judge output into structured verdicts.
+     * @param {string} rawOutput
+     * @param {FindingEntry[]} findings
+     * @returns {Array<{ dedupeKey: string, status: string, rationale: string, regression: string|null }>}
+     */
+    parseGateJudgeVerdicts(rawOutput, findings) {
+        try {
+            const parsed = JSON.parse(rawOutput);
+            if (Array.isArray(parsed)) {
+                return parsed.map((v) => ({
+                    dedupeKey: v.dedupeKey ?? '',
+                    status: v.status ?? 'rejected',
+                    rationale: v.rationale ?? '',
+                    regression: v.regression ?? null,
+                }));
+            }
+        } catch {
+            // Fall through
+        }
+        // Fallback: if parsing fails, reject all
+        return findings.map((f) => ({
+            dedupeKey: f.dedupeKey,
+            status: 'rejected',
+            rationale: 'Parse error in judge output',
+            regression: null,
+        }));
+    }
+
+    /**
+     * @param {{ agents: string[], maxRounds?: number, decider?: string, consensusThreshold?: number, seedFindings?: import('../schema/events.js').Finding[], disputedThreshold?: string, judgeAgent?: string, promptMode?: 'normal' | 'adversarial' | 'escalating', reviewGate?: import('./review-gate.js').GateConfig }} config
      */
     async run(config) {
         try {
@@ -1453,6 +1525,50 @@ export class DebateExecutor {
 
             // Phase 4: Resolve and notify
             const resolution = await this.resolveFinalFindings();
+
+            // --- Review Gate ---
+            if (this.reviewGate.enabled) {
+                this.session.gateState = 'pending';
+                const agreedFindings = this.lastAgreement?.agreed ?? this.findings;
+                const SEVERITY_RANK_LOCAL = { critical: 4, high: 3, medium: 2, low: 1, info: 0, design_challenge: 2 };
+
+                const gateFindings = agreedFindings.filter((f) => {
+                    const skipLevels = ['info', 'low'];
+                    const maxSkip = this.reviewGate.maxSeverityToSkip ?? 'info';
+                    const maxSkipRank = SEVERITY_RANK_LOCAL[maxSkip] ?? 0;
+                    const fRank = SEVERITY_RANK_LOCAL[f.severity] ?? 0;
+                    return fRank > maxSkipRank && !skipLevels.includes(f.severity);
+                });
+
+                if (gateFindings.length > 0) {
+                    const gatePrompt = buildGatePrompt(gateFindings, this.session);
+                    const judgeId = this.reviewGate.judge ?? 'claude-code';
+                    this.onSystemMessage(`Review Gate: validating ${gateFindings.length} agreed findings with ${judgeId}`);
+
+                    try {
+                        const gateResult = await this.runGateJudgeAgent(judgeId, gatePrompt, gateFindings);
+                        const verdict = buildGateResult(gateResult.verdicts, this.reviewGate);
+                        this.session.gateState = verdict.gateState;
+                        this.session.gateResult = verdict;
+                        this.onSystemMessage(`Review Gate: ${verdict.gateState} (${verdict.confirmedCount}/${verdict.totalCount} confirmed)`);
+
+                        if (verdict.gateState === 'blocked') {
+                            this.onSystemMessage(`Review Gate BLOCKED: ${verdict.blockedReason}`);
+                            if (this.reviewGate.blockOnRegression && verdict.blockedReason?.includes('Regression')) {
+                                this.onSystemMessage('Regression detected — debate unresolved, extra round may be needed');
+                            }
+                        }
+                    } catch (err) {
+                        this.onSystemMessage(`Review Gate error: ${err.message}. Continuing without gate.`);
+                        this.session.gateState = 'passed'; // Fail open
+                    }
+                } else {
+                    this.session.gateState = 'passed';
+                }
+            } else {
+                this.session.gateState = null;
+            }
+
             return resolution;
 } finally {
             this.cleanupFileScopedWorkspace();
