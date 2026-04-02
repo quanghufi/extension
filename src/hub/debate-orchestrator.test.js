@@ -671,7 +671,7 @@ describe('debate-orchestrator', () => {
                 assert.equal(fs.existsSync(path.join(sandboxPath, 'src', 'collab-routes.js')), false);
             });
 
-            it('splits file-scoped rebuttals into one finding per batch', async () => {
+            it('batches file-scoped rebuttals into groups of FILE_REVIEW_REBUTTAL_BATCH_SIZE', async () => {
                 const session = createMockSession();
                 session.id = 'sess-file-per-finding';
                 session.projectDir = process.cwd();
@@ -710,11 +710,10 @@ describe('debate-orchestrator', () => {
                     { dedupeKey: 'f2', severity: 'medium', title: 'B', agentId: 'codex', file: 'src/http-utils.js' },
                 ]);
 
-                assert.equal(calls.length, 2);
+                // Both findings fit in one batch (FILE_REVIEW_REBUTTAL_BATCH_SIZE=5)
+                assert.equal(calls.length, 1);
                 assert.match(String(calls[0][2]), /"dedupeKey": "f1"/i);
-                assert.doesNotMatch(String(calls[0][2]), /"dedupeKey": "f2"/i);
-                assert.match(String(calls[1][2]), /"dedupeKey": "f2"/i);
-                assert.doesNotMatch(String(calls[1][2]), /"dedupeKey": "f1"/i);
+                assert.match(String(calls[0][2]), /"dedupeKey": "f2"/i);
             });
 
             it('splits broad-scope rebuttals into multiple batches', async () => {

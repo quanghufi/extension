@@ -241,7 +241,7 @@ describe('debate-state', () => {
             const fields = createDefaultDebateFields();
             assert.equal(fields.debateState, null);
             assert.equal(fields.debateRound, 0);
-            assert.equal(fields.debateMaxRounds, 3);
+            assert.equal(fields.debateMaxRounds, 1);
             assert.equal(fields.debateAgents, null);
             assert.equal(fields.debateActive, false);
             assert.deepEqual(fields.debateRoundEvals, {});

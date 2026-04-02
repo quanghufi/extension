@@ -187,7 +187,7 @@ function formatDisputedFindingsJson(disputed) {
     );
 }
 
-const FILE_REVIEW_REBUTTAL_BATCH_SIZE = 1;
+const FILE_REVIEW_REBUTTAL_BATCH_SIZE = 5;
 
 /**
  * Unified output-format instructions for debate prompts.
@@ -547,21 +547,57 @@ function backfillFindingsFromReference(findings, referenceFindings, allowedKeys)
         }
     }
 
-    return findings
-        .filter((finding) => allowedKeys.includes(finding.dedupe_key))
-        .map((finding) => {
-            const reference = referenceByKey.get(finding.dedupe_key);
-            if (!reference) {
-                return finding;
+    // Build fuzzy index for reference findings (summary+file)
+    /** @type {Map<string, import('../schema/events.js').Finding>} */
+    const referenceByFuzzy = new Map();
+    for (const finding of referenceFindings) {
+        if (allowedKeys.includes(finding.dedupe_key)) {
+            const fuzzyKey = `${(finding.summary || '').toLowerCase().slice(0, 60)}|${(finding.file || '').toLowerCase()}`;
+            if (!referenceByFuzzy.has(fuzzyKey)) {
+                referenceByFuzzy.set(fuzzyKey, finding);
             }
+        }
+    }
 
-            return {
+    const matched = [];
+    const usedKeys = new Set();
+
+    // Pass 1: exact dedupe_key match
+    for (const finding of findings) {
+        if (allowedKeys.includes(finding.dedupe_key)) {
+            const reference = referenceByKey.get(finding.dedupe_key);
+            matched.push(reference
+                ? {
+                    ...reference,
+                    ...Object.fromEntries(
+                        Object.entries(finding).filter(([, value]) => value != null && value !== ''),
+                    ),
+                }
+                : finding,
+            );
+            usedKeys.add(finding.dedupe_key);
+        }
+    }
+
+    // Pass 2: fuzzy match for findings that didn't match by key
+    for (const finding of findings) {
+        if (usedKeys.has(finding.dedupe_key)) continue;
+        const fuzzyKey = `${(finding.summary || '').toLowerCase().slice(0, 60)}|${(finding.file || '').toLowerCase()}`;
+        const reference = referenceByFuzzy.get(fuzzyKey);
+        if (reference && !usedKeys.has(reference.dedupe_key)) {
+            // Adopt the reference dedupe_key so downstream matching works
+            matched.push({
                 ...reference,
                 ...Object.fromEntries(
                     Object.entries(finding).filter(([, value]) => value != null && value !== ''),
                 ),
-            };
-        });
+                dedupe_key: reference.dedupe_key,
+            });
+            usedKeys.add(reference.dedupe_key);
+        }
+    }
+
+    return matched;
 }
 
 // ── DebateReducer (Pure) ─────────────────────────────
@@ -1223,8 +1259,11 @@ export class DebateExecutor {
      * Build judge verdicts by comparing Claude's output against seed findings.
      * Each seed finding gets a verdict (confirmed/rejected) + rationale + suggested_fix.
      *
-     * When Claude returns structured judge output ({verdict, rationale, suggested_fix}),
-     * those fields are used directly. Otherwise, presence/absence infers the verdict.
+     * Strategy (ordered by priority):
+     * 1. Exact dedupe_key match with structured verdict field → use directly
+     * 2. Exact dedupe_key match without verdict → presence = confirmed
+     * 3. Fuzzy match by summary/file/line → use verdict if structured, else confirmed
+     * 4. No match at all → rejected (not reproduced)
      *
      * @param {import('../schema/events.js').Finding[]} seedFindings
      * @returns {Array<{ dedupeKey: string, verdict: 'confirmed'|'rejected', rationale: string, suggested_fix: string|null, judgeAgent: string }>}
@@ -1233,8 +1272,24 @@ export class DebateExecutor {
         const claudeFindings = this.rawFindingsByAgent.get('claude-code') ?? [];
         const claudeByKey = new Map(claudeFindings.map(f => [f.dedupe_key, f]));
 
+        // Build fuzzy index for fallback matching (summary+file)
+        /** @type {Map<string, typeof claudeFindings[0]>} */
+        const claudeByFuzzy = new Map();
+        for (const f of claudeFindings) {
+            const fuzzyKey = `${(f.summary || '').toLowerCase().slice(0, 60)}|${(f.file || '').toLowerCase()}`;
+            if (!claudeByFuzzy.has(fuzzyKey)) {
+                claudeByFuzzy.set(fuzzyKey, f);
+            }
+        }
+
         return seedFindings.map(finding => {
-            const claudeFinding = claudeByKey.get(finding.dedupe_key);
+            let claudeFinding = claudeByKey.get(finding.dedupe_key);
+
+            // Fallback: fuzzy match by summary + file if exact key miss
+            if (!claudeFinding) {
+                const seedFuzzyKey = `${(finding.summary || '').toLowerCase().slice(0, 60)}|${(finding.file || '').toLowerCase()}`;
+                claudeFinding = claudeByFuzzy.get(seedFuzzyKey);
+            }
 
             // If Claude returned a structured verdict field, use it directly
             if (claudeFinding && typeof /** @type {any} */ (claudeFinding).verdict === 'string') {
@@ -1288,6 +1343,55 @@ export class DebateExecutor {
 
 
     async resolveFinalFindings() {
+        // If judge verdicts exist, they are the authoritative source — skip re-consensus.
+        if (this.session.judgeVerdicts && this.session.judgeVerdicts.length > 0) {
+            const confirmedKeys = new Set(
+                this.session.judgeVerdicts
+                    .filter(v => v.verdict === 'confirmed')
+                    .map(v => v.dedupeKey),
+            );
+
+            // Agreed findings (not disputed) always survive
+            const agreement = this.lastAgreement
+                ?? new ConsensusEngine({ threshold: this.reducer.consensusThreshold })
+                    .calculateAgreement(this.findings, this.evaluations);
+            const agreedKeys = new Set((agreement.agreed || []).map(f => f.dedupeKey));
+
+            const survivingKeys = new Set([...agreedKeys, ...confirmedKeys]);
+            const finalFindings = flattenFindings([...this.rawFindingsByAgent.values()])
+                .filter((finding) => survivingKeys.has(finding.dedupe_key));
+
+            // Deduplicate by dedupe_key — keep first occurrence (highest-severity agent)
+            /** @type {Map<string, import('../schema/events.js').Finding>} */
+            const deduped = new Map();
+            for (const f of finalFindings) {
+                if (!deduped.has(f.dedupe_key)) {
+                    deduped.set(f.dedupe_key, f);
+                }
+            }
+            const uniqueFinal = [...deduped.values()];
+
+            this.applyResolvedFindings(uniqueFinal);
+            this.onSystemMessage(`Debate resolved with ${uniqueFinal.length} surviving finding(s) (${confirmedKeys.size} judge-confirmed, ${agreedKeys.size} agreed).`);
+
+            // Deduplicate logicalFindings by dedupeKey (same finding from multiple agents)
+            const seenLogical = new Set();
+            const logicalFindings = this.findings
+                .filter(f => survivingKeys.has(f.dedupeKey))
+                .filter(f => {
+                    if (seenLogical.has(f.dedupeKey)) return false;
+                    seenLogical.add(f.dedupeKey);
+                    return true;
+                });
+
+            return {
+                logicalFindings,
+                finalFindings: uniqueFinal,
+                evaluations: this.evaluations,
+            };
+        }
+
+        // Standard consensus path (no judge verdicts)
         const engine = new ConsensusEngine({ threshold: this.reducer.consensusThreshold });
         const tieBreakEvaluations = this.session.debateState === 'tie_break'
             ? await this.runTieBreakerIfNeeded()
@@ -1485,22 +1589,17 @@ export class DebateExecutor {
                 this.onSystemMessage(judgeable.length + ' disputed finding(s) detected. Running targeted judge...');
                 this.transition('no_consensus');
 
-                const scope = getReviewScope(this.session);
-                const batches = splitDisputedIntoBatches(agreement.disputed, { fileReview: scope.isFileReview });
                 const judgeAgent = config.judgeAgent ?? config.agents.find(a => a === 'claude-code') ?? config.agents[config.agents.length - 1];
 
-                for (const [index, batch] of batches.entries()) {
-                    const batchLabel = batches.length > 1
-                        ? '\n\nJudge batch ' + (index + 1) + ' of ' + batches.length + '.'
-                        : '';
-                    const disputedKeys = new Set(batch.map(f => f.dedupeKey));
-                    const batchFindings = this._findingsForKeys([...disputedKeys]);
-                    await this.runReviewPass([judgeAgent], {
-                        phase: 'review',
-                        prompt: buildJudgePrompt(batchFindings, this.session) + batchLabel,
-                        seedFindings: batchFindings,
-                    });
-                }
+                // Send ALL disputed findings to judge in a single call — no per-finding batching.
+                // Batching judge calls wastes tokens and causes key-matching failures.
+                const allDisputedKeysForJudge = [...new Set(judgeable.map(f => f.dedupeKey))];
+                const allBatchFindings = this._findingsForKeys(allDisputedKeysForJudge);
+                await this.runReviewPass([judgeAgent], {
+                    phase: 'review',
+                    prompt: buildJudgePrompt(allBatchFindings, this.session),
+                    seedFindings: allBatchFindings,
+                });
 
                 const allDisputedKeys = [...new Set(judgeable.map(f => f.dedupeKey))];
                 const allDisputedFindings = this._findingsForKeys(allDisputedKeys);
