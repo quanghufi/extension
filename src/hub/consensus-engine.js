@@ -16,6 +16,7 @@
  *   severity: string,
  *   title: string,
  *   agentId: string,
+ *   confidence?: number,
  *   round?: number,
  *   timestamp?: string,
  * }} FindingEntry
@@ -35,6 +36,7 @@
  *   originalAgent: string,
  *   status: 'agreed' | 'disputed' | 'dropped',
  *   confidence: number,
+ *   originalConfidence: 'certain' | 'likely' | 'inference',
  *   evaluations: EvaluationEntry[],
  * }} MergedFinding
  *
@@ -56,6 +58,28 @@ const SEVERITY_RANK = Object.freeze({
     low: 1,
     info: 0,
 });
+
+/** @param {string} confidence @returns {number} */
+function confidenceWeight(confidence) {
+    switch (confidence) {
+        case 'certain':  return 1.0;
+        case 'likely':   return 0.6;
+        case 'inference': return 0.2;
+        default:          return 0.5;
+    }
+}
+
+/**
+ * Map numeric confidence (0.0-1.0) to confidence enum.
+ * @param {number} [numericConfidence]
+ * @returns {'certain' | 'likely' | 'inference'}
+ */
+function toConfidenceLevel(numericConfidence) {
+    if (numericConfidence == null) return 'likely';
+    if (numericConfidence >= 0.8) return 'certain';
+    if (numericConfidence >= 0.4) return 'likely';
+    return 'inference';
+}
 
 /**
  * Compare two severities. Returns > 0 if a is more severe.
@@ -216,6 +240,7 @@ export class ConsensusEngine {
                 originalAgent: f.agentId,
                 status: 'agreed',
                 confidence: 1.0,
+                originalConfidence: toConfidenceLevel(f.confidence),
                 evaluations: evalsForThis,
             });
         }
@@ -247,6 +272,7 @@ export class ConsensusEngine {
                 originalAgent: f.agentId,
                 status: 'disputed',
                 confidence,
+                originalConfidence: toConfidenceLevel(f.confidence),
                 evaluations: evalsForThis,
             });
         }

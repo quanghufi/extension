@@ -18,6 +18,12 @@ import { v4 as uuidv4 } from 'uuid';
 const SEVERITY_LEVELS = /** @type {const} */ (['critical', 'high', 'medium', 'low']);
 
 /** @type {readonly string[]} */
+const CONFIDENCE_LEVELS = /** @type {const} */ (['certain', 'likely', 'inference']);
+
+/** @type {readonly string[]} */
+const VERDICT_VALUES = /** @type {const} */ (['fail', 'pass', 'conditional']);
+
+/** @type {readonly string[]} */
 const COLLAB_EVENT_TYPES = /** @type {const} */ ([
     'message_posted', 'turn_claimed', 'turn_released', 'turn_expired',
     'agent_assigned', 'collab_state_changed',
@@ -153,6 +159,58 @@ export function computeDedupeKey({ file, line, summary }) {
     return createHash('sha256').update(input, 'utf-8').digest('hex').slice(0, 16);
 }
 
+/**
+ * Creates a structured output envelope.
+ * Falls back to wrapping unstructured output.
+ *
+ * @param {string|Object} rawOutput - Raw agent output
+ * @param {Finding[]} [findings] - Pre-parsed findings
+ * @returns {StructuredOutput}
+ */
+export function createStructuredOutput(rawOutput, findings = []) {
+    // Already structured
+    if (rawOutput && typeof rawOutput === 'object' && 'verdict' in rawOutput) {
+        return rawOutput;
+    }
+
+    // Try to parse JSON
+    if (typeof rawOutput === 'string') {
+        try {
+            const parsed = JSON.parse(rawOutput);
+            if (parsed && typeof parsed === 'object' && 'verdict' in parsed) {
+                return parsed;
+            }
+        } catch {
+            // Fall through to legacy wrapper
+        }
+    }
+
+    // Legacy wrapper: treat as unstructured, derive what we can
+    const summary = typeof rawOutput === 'string'
+        ? rawOutput.substring(0, 200)
+        : 'Unable to parse structured output';
+
+    return {
+        verdict: findings.length > 0 ? 'fail' : 'pass',
+        summary,
+        findings,
+        next_steps: [],
+    };
+}
+
+/**
+ * @param {ConfidenceLevel} confidence
+ * @returns {number} Weight multiplier for consensus (0.0-1.0)
+ */
+export function confidenceToWeight(confidence) {
+    switch (confidence) {
+        case 'certain':  return 1.0;
+        case 'likely':   return 0.6;
+        case 'inference': return 0.2;
+        default:          return 0.5;
+    }
+}
+
 // ── Type Definitions (JSDoc) ─────────────────────────
 
 /**
@@ -188,6 +246,19 @@ export function computeDedupeKey({ file, line, summary }) {
  */
 
 /**
+ * @typedef {Object} StructuredOutput
+ * @property {string} verdict - 'fail' | 'pass' | 'conditional'
+ * @property {string} summary - 1-2 sentence summary
+ * @property {Finding[]} findings - Array of findings
+ * @property {string[]} next_steps - Suggested actions
+ * @property {string} [agent_id] - Optional agent identifier
+ */
+
+/**
+ * @typedef {'certain' | 'likely' | 'inference'} ConfidenceLevel
+ */
+
+/**
  * @typedef {Object} AdapterResult
  * @property {'ok'|'failed'|'timeout'} status
  * @property {Finding[]} findings
@@ -201,4 +272,4 @@ export function computeDedupeKey({ file, line, summary }) {
  * @property {number} totalMs
  */
 
-export { SEVERITY_LEVELS, EVENT_TYPES, COLLAB_EVENT_TYPES, DEBATE_EVENT_TYPES };
+export { SEVERITY_LEVELS, EVENT_TYPES, COLLAB_EVENT_TYPES, DEBATE_EVENT_TYPES, CONFIDENCE_LEVELS, VERDICT_VALUES };

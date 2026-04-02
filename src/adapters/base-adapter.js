@@ -16,6 +16,18 @@
  */
 
 import { executeProcess } from './adapter-execution.js';
+import { createStructuredOutput } from '../schema/events.js';
+
+/**
+ * Normalize raw agent output to StructuredOutput.
+ * Adapter implementations can call this from parseResult().
+ * @param {string|Object} raw
+ * @param {import('../schema/events.js').Finding[]} findings
+ * @returns {import('../schema/events.js').StructuredOutput}
+ */
+export function normalizeStructuredOutput(raw, findings) {
+    return createStructuredOutput(raw, findings);
+}
 
 // ── Constants ────────────────────────────────────────
 

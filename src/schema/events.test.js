@@ -8,6 +8,8 @@ import {
     normalizeSummary,
     SEVERITY_LEVELS,
     EVENT_TYPES,
+    createStructuredOutput,
+    confidenceToWeight,
 } from './events.js';
 
 describe('createEvent', () => {
@@ -221,5 +223,69 @@ describe('computeDedupeKey', () => {
         const key = computeDedupeKey({ file: 'src/a.js', line: 1, summary: 'test' });
         assert.equal(key.length, 16);
         assert.match(key, /^[0-9a-f]{16}$/);
+    });
+});
+
+describe('createStructuredOutput', () => {
+    it('passes through already-structured output', () => {
+        const input = {
+            verdict: 'fail',
+            summary: 'Security issue found',
+            findings: [],
+            next_steps: ['Fix the vulnerability'],
+        };
+        const result = createStructuredOutput(input);
+        assert.equal(result.verdict, 'fail');
+        assert.equal(result.summary, 'Security issue found');
+        assert.deepStrictEqual(result.next_steps, ['Fix the vulnerability']);
+    });
+
+    it('wraps unstructured string as legacy output', () => {
+        const result = createStructuredOutput('Something is wrong here');
+        assert.equal(result.verdict, 'pass');
+        assert.equal(result.summary, 'Something is wrong here');
+        assert.deepStrictEqual(result.findings, []);
+    });
+
+    it('parses JSON string with verdict field', () => {
+        const input = JSON.stringify({
+            verdict: 'conditional',
+            summary: 'Needs review',
+            findings: [],
+            next_steps: ['Review manually'],
+        });
+        const result = createStructuredOutput(input);
+        assert.equal(result.verdict, 'conditional');
+        assert.equal(result.summary, 'Needs review');
+    });
+
+    it('sets verdict to fail when findings provided', () => {
+        const finding = createFinding({
+            severity: 'high',
+            summary: 'SQL injection risk',
+            evidence: 'User input in query',
+            file: 'db.js',
+        });
+        const result = createStructuredOutput('Some text', [finding]);
+        assert.equal(result.verdict, 'fail');
+        assert.equal(result.findings.length, 1);
+    });
+
+    it('truncates long unstructured output to 200 chars', () => {
+        const longText = 'A'.repeat(500);
+        const result = createStructuredOutput(longText);
+        assert.equal(result.summary.length, 200);
+    });
+});
+
+describe('confidenceToWeight', () => {
+    it('returns correct weights', () => {
+        assert.equal(confidenceToWeight('certain'), 1.0);
+        assert.equal(confidenceToWeight('likely'), 0.6);
+        assert.equal(confidenceToWeight('inference'), 0.2);
+    });
+
+    it('returns 0.5 for unknown confidence level', () => {
+        assert.equal(confidenceToWeight('unknown'), 0.5);
     });
 });
