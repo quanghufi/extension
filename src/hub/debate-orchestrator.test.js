@@ -10,6 +10,8 @@ import {
     buildInitialReviewPrompt,
     buildRebuttalPrompt,
     buildTieBreakPrompt,
+    buildAdversarialReviewPrompt,
+    buildEscalatingReviewPrompt,
 } from './debate-orchestrator.js';
 import { DEBATE_PROMPT_MARKER } from '../adapters/claude-code-parsing.js';
 
@@ -1133,6 +1135,64 @@ describe('debate-orchestrator', () => {
                     /all agents failed/i,
                 );
             });
+        });
+    });
+
+    describe('buildAdversarialReviewPrompt', () => {
+        const mockSession = {
+            prompt: 'Review this PR for security issues',
+            reviewOptions: {},
+        };
+
+        it('includes hostile design reviewer framing', () => {
+            const prompt = buildAdversarialReviewPrompt(mockSession);
+            assert.match(prompt, /HOSTILE design reviewer/i);
+        });
+
+        it('includes four challenge areas', () => {
+            const prompt = buildAdversarialReviewPrompt(mockSession);
+            assert.match(prompt, /WHY/);
+            assert.match(prompt, /FAILURE/);
+            assert.match(prompt, /ASSUMPTIONS/);
+            assert.match(prompt, /COST/);
+        });
+
+        it('includes structured output instructions', () => {
+            const prompt = buildAdversarialReviewPrompt(mockSession);
+            assert.match(prompt, /verdict.*fail.*pass.*conditional/);
+            assert.match(prompt, /confidence.*certain.*likely.*inference/);
+            assert.match(prompt, /design_challenge/);
+        });
+
+        it('does not mention finding bugs as the job', () => {
+            const prompt = buildAdversarialReviewPrompt(mockSession);
+            assert.match(prompt, /your job is NOT to find bugs/i);
+        });
+    });
+
+    describe('buildEscalatingReviewPrompt', () => {
+        const mockSession = {
+            prompt: 'Review this PR for security issues',
+            reviewOptions: {},
+        };
+
+        it('returns normal prompt when findings >= threshold', () => {
+            const normal = buildInitialReviewPrompt(mockSession);
+            const escalating = buildEscalatingReviewPrompt(mockSession, 5, 3);
+            assert.equal(escalating, normal);
+        });
+
+        it('returns adversarial prompt when findings < threshold', () => {
+            const adversarial = buildAdversarialReviewPrompt(mockSession);
+            const escalating = buildEscalatingReviewPrompt(mockSession, 2, 3);
+            assert.equal(escalating, adversarial);
+        });
+
+        it('uses custom escalation threshold', () => {
+            const adversarial = buildAdversarialReviewPrompt(mockSession);
+            // findings=4, threshold=5 → below threshold → adversarial
+            const escalating = buildEscalatingReviewPrompt(mockSession, 4, 5);
+            assert.equal(escalating, adversarial);
         });
     });
 });

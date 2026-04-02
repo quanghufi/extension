@@ -15,7 +15,7 @@ import { v4 as uuidv4 } from 'uuid';
 // ── Constants ────────────────────────────────────────
 
 /** @type {readonly string[]} */
-const SEVERITY_LEVELS = /** @type {const} */ (['critical', 'high', 'medium', 'low']);
+const SEVERITY_LEVELS = /** @type {const} */ (['critical', 'high', 'medium', 'low', 'design_challenge']);
 
 /** @type {readonly string[]} */
 const CONFIDENCE_LEVELS = /** @type {const} */ (['certain', 'likely', 'inference']);
@@ -84,7 +84,7 @@ export function createEvent(sessionId, agentId, eventType, payload) {
  * Summary is normalized before hashing.
  *
  * @param {Object} opts
- * @param {string} opts.severity - 'critical' | 'high' | 'medium' | 'low'
+ * @param {string} opts.severity - 'critical' | 'high' | 'medium' | 'low' | 'design_challenge'
  * @param {string} opts.summary - Short description of the issue
  * @param {string} opts.evidence - Detailed evidence / code quotes
  * @param {string} opts.file - File path (should be normalized before calling)
@@ -226,7 +226,7 @@ export function confidenceToWeight(confidence) {
 /**
  * @typedef {Object} Finding
  * @property {string} id - Unique ID (F-XXXXXXXX)
- * @property {string} severity - 'critical' | 'high' | 'medium' | 'low'
+ * @property {string} severity - 'critical' | 'high' | 'medium' | 'low' | 'design_challenge'
  * @property {string} summary
  * @property {string} evidence
  * @property {string} file
