@@ -207,7 +207,7 @@ export class HubServer {
             }
             this.store.save(session);
             // State machine cleanup: remove handoff artifacts after finalize
-            this.cleanupHandoffArtifacts(session.projectDir).catch(() => {});
+            this.cleanupHandoffArtifacts(session.projectDir).catch(() => { });
 
         } catch (err) {
             console.error(`runSession error for ${sessionId}:`, err);
@@ -219,7 +219,7 @@ export class HubServer {
                 this.broadcast(sessionId, session.addEvent(failedEvent));
                 session.finalize('failed');
                 this.store.save(session);
-                this.cleanupHandoffArtifacts(session.projectDir).catch(() => {});
+                this.cleanupHandoffArtifacts(session.projectDir).catch(() => { });
             }
         } finally {
             // Let a background debate keep ownership of the active session slot.
@@ -263,7 +263,7 @@ export class HubServer {
             // Emit debate_started event
             const startedEvent = createEvent(sessionId, 'system', 'debate_started', {
                 agents: config.agents,
-                maxRounds: config.maxRounds ?? 3,
+                maxRounds: config.maxRounds ?? 1,
                 decider: config.decider ?? null,
                 seedFindingCount: config.seedFindings?.length ?? 0,
             });
@@ -283,7 +283,7 @@ export class HubServer {
 
             this.store.save(session);
             // State machine cleanup: remove handoff artifacts after debate
-            this.cleanupHandoffArtifacts(session.projectDir).catch(() => {});
+            this.cleanupHandoffArtifacts(session.projectDir).catch(() => { });
             return result;
         } catch (err) {
             console.error(`[Debate] runDebate error for ${sessionId}:`, err);

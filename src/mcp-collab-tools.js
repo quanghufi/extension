@@ -442,7 +442,7 @@ export function registerCollabTools(mcpServer, hub) {
         {
             sessionId: z.string().describe('Session UUID — must be a completed review session'),
             agents: z.array(z.string()).min(1).max(2).describe('Agent IDs to debate (1-2 agents, e.g. ["codex"] or ["codex", "claude-code"])'),
-            maxRounds: z.number().optional().describe('Maximum debate rounds (default: 3)'),
+            maxRounds: z.number().optional().describe('Maximum debate rounds (default: 1)'),
             decider: z.string().optional().describe('Decider agent ID for tie-breaks (required if 2 agents)'),
             consensusThreshold: z.number().optional().describe('Agreement threshold 0.0-1.0 (default: 0.7)'),
             judgeAgent: z.string().optional().describe('Agent ID to use as judge for disputed findings (default: claude-code)'),

@@ -190,9 +190,9 @@ describe('buildMcpServer', () => {
 
             assert.equal(payload.storage.persisted, true);
             assert.equal(typeof payload.storage.storePath, 'string');
-            assert.equal(payload.reviewAgent, 'codex');
+            assert.equal(payload.reviewState, 'skipped');
             assert.equal(payload.maxRounds, 1);
-            assert.equal(payload.debateMode, 'codex_findings_only');
+            assert.equal(payload.debateMode, 'parallel_review');
             const expectedSessionsDir = path.join(testDir, 'data', 'sessions');
             assert.ok(payload.storage.storePath.startsWith(expectedSessionsDir));
             assert.match(payload.storage.storePath, /sessions[\\/].+\.json$/i);
